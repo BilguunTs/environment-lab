@@ -1,0 +1,99 @@
+# HC Task 7 fix round 2 (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/summit_sequence.gd scripts/levels/summit_sequence.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/summit_sequence.gd	2026-11-08 18:14:17.106476800 +0800
++++ scripts/levels/summit_sequence.gd	2026-11-08 18:14:34.867619700 +0800
+@@ -40,24 +40,27 @@
+ ## The gameplay camera's pose at the end of SLOWING (where SummitCamera takes over): looking
+ ## along -Z (yaw 0), at pitch 16 degrees and 9 m out, a little higher and further back than the
+ ## climb's 14 degrees and 7 m. The player's own pitch and distance come back on reset.
+ const LOOK_YAW_DEG := 0.0
+ const LOOK_PITCH_DEG := 16.0
+ const LOOK_DISTANCE := 9.0
+ ## Where she faces at the end of SLOWING: the Model's yaw toward -Z (Player: atan2(dir.x, dir.z)).
+ const FACE_YAW := PI
+ 
+ ## The REVEAL rise's end pose, relative to her feet: high enough behind her to see over the
+-## summit's rim and plateau down onto the mist sea, close enough that she stays clear and large.
+-## REVEAL_ARC_LIFT bows the path upward (a quadratic Bezier), so it rises before it closes in.
+-const REVEAL_CAM_OFFSET := Vector3(0.0, 12.0, 14.0)
+-const REVEAL_CAM_LOOK := Vector3(0.0, -6.0, -40.0)
++## summit's rim and plateau, aimed nearly level (about 9 degrees down) so the mist sea fills the
++## middle band of the frame with her low in it. REVEAL_ARC_LIFT bows the path upward (a quadratic
++## Bezier). The rise has its own, shorter clock (RISE_SECONDS) and then holds, so the second half
++## of the fog parting is watched from the raised pose.
++const RISE_SECONDS := 4.5
++const REVEAL_CAM_OFFSET := Vector3(0.0, 16.0, 24.0)
++const REVEAL_CAM_LOOK := Vector3(0.0, -6.0, -120.0)
+ const REVEAL_ARC_LIFT := 2.0
+ ## The pull-back's end frame, relative to her feet: the camera high behind her (+Z), looking
+ ## down past her across the mist sea toward the gap in the ridges (-Z). PULL_ARC_LIFT raises the
+ ## path's middle, so the crane rises a little ahead of travelling back.
+ const PULL_END_OFFSET := Vector3(0.0, 48.0, 80.0)
+ const PULL_END_LOOK := Vector3(0.0, -36.0, -300.0)
+ const PULL_ARC_LIFT := 18.0
+ ## Where skip_to() puts her when she isn't at the summit yet (where a walk-in stops).
+ const SKIP_PROGRESS := 0.975
+ 
+@@ -206,21 +209,21 @@
+ 			level.follow_cam.distance = lerpf(_cam_dist0, LOOK_DISTANCE, e)
+ 			if _t >= SLOWING_SECONDS:
+ 				_settle_her()
+ 				level.follow_cam.yaw_deg = LOOK_YAW_DEG
+ 				level.follow_cam.pitch_deg = LOOK_PITCH_DEG
+ 				level.follow_cam.distance = LOOK_DISTANCE
+ 				level.follow_cam.snap()  # the exact look pose SummitCamera starts from
+ 				_begin_summit_camera()
+ 				_next(Phase.REVEAL)
+ 		Phase.REVEAL:
+-			_place_rise(ease_in_out(_t / REVEAL_SECONDS))
++			_place_rise(ease_in_out(_t / RISE_SECONDS))
+ 			level.vista.reveal = ease_in_out(_t / REVEAL_SECONDS)
+ 			level.mood.wind_surge = ease_in_out(_t / SURGE_SECONDS)
+ 			if not clap_played and _t >= CLAP_AT:
+ 				clap_played = true
+ 				level.soundscape.play_thunder(true)
+ 			if _t >= REVEAL_SECONDS:
+ 				level.vista.reveal = 1.0
+ 				level.mood.wind_surge = 1.0
+ 				_place_pull(0.0)
+ 				_next(Phase.PULLBACK)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_summit.gd tests/test_heavens_summit.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_summit.gd	2026-11-08 18:14:17.158349600 +0800
++++ tests/test_heavens_summit.gd	2026-11-08 18:15:47.102929900 +0800
+@@ -212,32 +212,33 @@
+ 	before = lv.get_viewport().get_camera_3d().global_transform
+ 	var orbit := Vector3(lv.follow_cam.yaw_deg, lv.follow_cam.pitch_deg, lv.follow_cam.distance)
+ 	await _drag_and_wheel()
+ 	after = lv.get_viewport().get_camera_3d().global_transform
+ 	check(before.is_equal_approx(after), "REVEAL: camera unmoved by drag and wheel")
+ 	var orbit_after := Vector3(lv.follow_cam.yaw_deg, lv.follow_cam.pitch_deg, lv.follow_cam.distance)
+ 	check(orbit.is_equal_approx(orbit_after), "REVEAL: the gameplay orbit untouched too")
+ 
+ 
+ ## Ruling 12: the reveal is watched as it happens. The cinematic camera rises over the rim
+-## (it looks down onto the plateau and past it) with her still clear and fairly large.
++## (it looks nearly level across the plateau to the mist sea) with her still clear: over 4% of
++## the frame height (about 5.5% at the 16 / 24 m pose), well above the pull-back end's 1.8%.
+ func test_reveal_rises_over_the_rim(lv) -> void:
+ 	lv.summit.skip_to(SummitSequence.Phase.PULLBACK)  # PULLBACK starts at the rise's end pose
+ 	lv.summit.set_process(false)
+ 	await frames(2)
+ 	var cam: Camera3D = lv.get_viewport().get_camera_3d()
+ 	var feet: Vector3 = lv.player.global_position
+ 	check(cam.global_position.y - feet.y >= 10.0, "risen at least 10 m above her")
+ 	var top: Vector2 = cam.unproject_position(feet + Vector3.UP * 1.7)
+ 	var foot: Vector2 = cam.unproject_position(feet)
+ 	var size: Vector2 = lv.get_viewport().get_visible_rect().size
+-	check(absf(foot.y - top.y) > size.y * 0.05, "she is still fairly large (%.1f%%)" % (100.0 * absf(foot.y - top.y) / size.y))
++	check(absf(foot.y - top.y) > size.y * 0.04, "she is still clear, not yet tiny (%.1f%%)" % (100.0 * absf(foot.y - top.y) / size.y))
+ 	check(Rect2(Vector2.ZERO, size).grow(-size.y * 0.05).has_point(foot), "she is in frame")
+ 
+ 
+ ## reset_scene() cuts off a clap or footstep still sounding.
+ func test_reset_stops_one_shots(lv) -> void:
+ 	var thunder: AudioStreamPlayer = lv.soundscape.get_node("Thunder")
+ 	thunder.stream = AudioStreamGenerator.new()
+ 	thunder.play()
+ 	await frames(1)
+ 	lv.reset_scene()
+# new/changed binary or audio files:

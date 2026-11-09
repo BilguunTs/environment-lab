@@ -1,0 +1,49 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Material" path="res://assets/materials/deadwood.tres" id="1"]
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_1"]
+top_radius = 0.06
+bottom_radius = 0.3
+height = 7.5
+radial_segments = 5
+rings = 0
+
+[sub_resource type="CylinderMesh" id="CylinderMesh_2"]
+top_radius = 0.03
+bottom_radius = 0.1
+height = 2.6
+radial_segments = 4
+rings = 0
+
+[sub_resource type="CylinderShape3D" id="CylinderShape3D_3"]
+radius = 0.3
+height = 4
+
+[node name="TreeDead" type="Node3D"]
+
+[node name="Trunk" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_1")
+material_override = ExtResource("1")
+transform = Transform3D(0.9988, -0.05, 0, 0.05, 0.9988, 0, 0, 0, 1, 0, 3.75, 0)
+
+[node name="BranchA" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_2")
+material_override = ExtResource("1")
+transform = Transform3D(0.6216, 0.7833, 0, -0.7833, 0.6216, 0, 0, 0, 1, 0.7, 4.6, 0)
+
+[node name="BranchB" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_2")
+material_override = ExtResource("1")
+transform = Transform3D(0.4742, -0.5538, 0.4794, 0.8415, 0.4052, 0, -0.259, 0.3026, 0.8776, -0.55, 5.6, 0.2)
+
+[node name="BranchC" type="MeshInstance3D" parent="."]
+mesh = SubResource("CylinderMesh_2")
+material_override = ExtResource("1")
+transform = Transform3D(-0.0223, -0.0113, 0.9996, -0.6442, 0.4589, 0, -0.7645, -0.3864, -0.0292, 0.1, 6.3, -0.4)
+
+[node name="Body" type="StaticBody3D" parent="."]
+
+[node name="Shape" type="CollisionShape3D" parent="Body"]
+shape = SubResource("CylinderShape3D_3")
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)

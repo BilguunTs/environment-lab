@@ -1,0 +1,666 @@
+# HC Task 3 review package (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/camera/follow_camera.gd scripts/camera/follow_camera.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/camera/follow_camera.gd	2026-11-08 16:12:25.699735500 +0800
++++ scripts/camera/follow_camera.gd	2026-11-08 16:19:43.800368700 +0800
+@@ -14,24 +14,35 @@
+ @export_range(-10.0, 80.0, 1.0) var pitch_deg := 14.0:
+ 	set(value):
+ 		pitch_deg = clampf(value, min_pitch, max_pitch)
+ ## Orbit limits for pitch_deg, in degrees above the horizon.
+ @export var min_pitch := -10.0
+ @export var max_pitch := 80.0
+ @export var yaw_deg := 0.0
+ @export var follow_smoothing := 6.0
+ @export var mouse_orbit_sensitivity := 0.25
+ @export var key_orbit_speed := 90.0
++## Physics layers the camera can't pass through (0 = off). When set, a ray from the look target
++## to the camera stops it short of the first hit, so walls never come between her and the view.
++@export_flags_3d_physics var collision_mask := 0
+ ## Off while a panel text field has focus, so typing Q or E doesn't orbit.
+ var input_enabled := true
+ 
++## How far in front of a hit the camera stops, in metres.
++const COLLISION_MARGIN := 0.3
++## The camera never pulls in closer than this to the look target.
++const MIN_DISTANCE := 0.6
++## How fast the camera eases back out once a wall stops blocking it (per second).
++const RETURN_SPEED := 3.0
++
+ var _pivot := Vector3.ZERO
++var _clear_distance := INF  # how far out the camera may be (smoothed); collision only
+ 
+ 
+ func _ready() -> void:
+ 	if target:
+ 		_pivot = _goal()
+ 	_place()
+ 
+ 
+ func _unhandled_input(event: InputEvent) -> void:
+ 	if not current:
+@@ -48,31 +59,49 @@
+ 			distance = minf(40.0, distance * 1.1)
+ 			user_adjusted.emit()
+ 
+ 
+ func _process(delta: float) -> void:
+ 	if current and input_enabled:
+ 		var orbit := float(Input.is_key_pressed(KEY_E)) - float(Input.is_key_pressed(KEY_Q))
+ 		yaw_deg += orbit * key_orbit_speed * delta
+ 	if target:
+ 		_pivot = _pivot.lerp(_goal(), 1.0 - exp(-follow_smoothing * delta))
+-	_place()
++	_place(delta)
+ 
+ 
+ ## Jump straight to the target, skipping smoothing (used after teleports/resets).
+ func snap() -> void:
+ 	if target:
+ 		_pivot = _goal()
+ 	_place()
+ 
+ 
+ func _goal() -> Vector3:
+ 	return target.global_position + Vector3.UP * height
+ 
+ 
+-func _place() -> void:
++## Puts the camera on its orbit. `delta` 0 (a snap) skips the ease-out after a collision.
++func _place(delta := 0.0) -> void:
+ 	var offset := Basis.from_euler(Vector3(deg_to_rad(-pitch_deg), deg_to_rad(yaw_deg), 0.0)) * Vector3.BACK
+-	var pos := _pivot + offset * distance
++	var pos := _pivot + offset * _collided_distance(offset, delta)
+ 	pos.y = maxf(pos.y, 0.15)  # never dip below the ground plane
+ 	global_position = pos
+ 	if not pos.is_equal_approx(_pivot):
+ 		look_at(_pivot, Vector3.UP)
++
++
++## `distance`, shortened to stay in front of anything on `collision_mask` between the look target
++## and the camera. It pulls in at once (a wall is never seen from inside) and eases back out.
++func _collided_distance(offset: Vector3, delta: float) -> float:
++	if collision_mask == 0 or not is_inside_tree():
++		return distance
++	var q := PhysicsRayQueryParameters3D.create(_pivot, _pivot + offset * distance, collision_mask)
++	var hit := get_world_3d().direct_space_state.intersect_ray(q)
++	var limit := distance
++	if not hit.is_empty():
++		limit = maxf(_pivot.distance_to(hit.position) - COLLISION_MARGIN, MIN_DISTANCE)
++	if delta <= 0.0 or limit < _clear_distance:
++		_clear_distance = limit
++	else:
++		_clear_distance = lerpf(_clear_distance, limit, 1.0 - exp(-RETURN_SPEED * delta))
++	return minf(distance, _clear_distance)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd	2026-11-08 16:12:25.819281200 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 16:19:08.725815400 +0800
+@@ -6,45 +6,54 @@
+ ## Seconds the screen takes to fade in from black at the start.
+ const FADE_IN_SECONDS := 3.0
+ ## She is put back on the trail when she falls this far below the stretch she is over.
+ const FALL_DEPTH := 15.0
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var wind: Wind = $Wind
+ @onready var trail: Trail = $Trail
+ @onready var terrain: MountainTerrain = $MountainTerrain
++@onready var mood: MoodDirector = $MoodDirector
++@onready var storm: Storm = $Storm
++@onready var mist: FogVolume = $Mist
+ @onready var _fade: ColorRect = $UI/Fade
+ 
+ ## Furthest progress (0 = foot, 1 = summit) she has reached along the trail. It only ever
+ ## increases, so walking back down or falling never undoes the mood.
+ var furthest_progress := 0.0
+ 
+ var _fade_tween: Tween
+ 
+ 
+ func _ready() -> void:
+ 	reset_scene()
+ 
+ 
++func _process(_delta: float) -> void:
++	mood.apply(MoodDirector.sample(furthest_progress))
++
++
+ func _physics_process(_delta: float) -> void:
+ 	var pos := player.global_position
+ 	var progress := trail.progress_at(pos)
+ 	furthest_progress = maxf(furthest_progress, progress)
+ 	if pos.y < trail.point_at(progress).y - FALL_DEPTH:
+ 		respawn()
+ 
+ 
+ ## Puts the girl back at the trail start facing up the trail, restarts the fade-in from black,
+-## and resets the progress, the mood and the sequence (later tasks extend this).
++## and resets the progress, the mood and the storm (later tasks extend this).
+ func reset_scene() -> void:
+ 	furthest_progress = 0.0
++	storm.reset()
++	mood.apply(MoodDirector.sample(0.0))
+ 	_place_on_trail(0.0)
+ 	_restart_fade()
+ 
+ 
+ ## Puts her back on the trail at the furthest point she reached, at rest.
+ func respawn() -> void:
+ 	_place_on_trail(furthest_progress)
+ 
+ 
+ func _place_on_trail(progress: float) -> void:
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/mood_director.gd scripts/levels/mood_director.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/mood_director.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/levels/mood_director.gd	2026-11-08 16:22:29.477400900 +0800
+@@ -0,0 +1,179 @@
++class_name MoodDirector
++extends Node
++## The level's mood: four keys, one per stretch, blended by her FURTHEST progress along the trail
++## (never by time), so a slow or wandering player still gets the whole build-up and walking back
++## down never undoes it. HeavensCall calls `apply(MoodDirector.sample(furthest_progress))` each
++## frame; `apply` drives the Wind node, the fog, the mist, the sun, the sky, the storm's lightning
++## rate and (once it exists) the soundscape's volumes.
++##
++## Blending: between two keys every value follows a smoothstep from one key to the next, so the
++## mood builds through each stretch. The GATED values (lightning, eerie ambience) are the
++## exception: they belong to a stretch and switch in over GATE_RAMP after its start instead of
++## creeping in ahead of it, so there is no lightning and no eerie sound before EERIE.
++##
++## Key table (tuned by eye; see the captures in the Task 3 report):
++##
++## | key              | ASCENT 0.00      | DISCOVERY 0.28   | EERIE 0.57       | SUMMIT 0.86      |
++## |------------------|------------------|------------------|------------------|------------------|
++## | wind             | 0.70             | 0.85             | 1.15             | 1.45             |
++## | wind_swing_deg   | 6                | 8                | 14               | 10               |
++## | fog_density      | 0.014            | 0.017            | 0.028            | 0.022            |
++## | mist             | 0.35             | 0.45             | 0.80             | 0.55             |
++## | lightning_per_min| 0                | 0                | 2.0              | 0                |
++## | sun_energy       | 1.30             | 1.10             | 0.80             | 1.00             |
++## | sun_color        | (1.00,0.88,0.74) | (0.95,0.86,0.76) | (0.80,0.82,0.88) | (0.95,0.84,0.70) |
++## | ambient          | 0.45             | 0.50             | 0.75             | 0.95             |
++## | sky_color        | (0.56,0.58,0.60) | (0.52,0.54,0.56) | (0.42,0.45,0.49) | (0.50,0.50,0.52) |
++## | zenith_color     | (0.34,0.39,0.46) | (0.31,0.35,0.41) | (0.23,0.26,0.32) | (0.28,0.30,0.36) |
++## | vol_wind         | 0.70             | 0.75             | 0.60             | 0.50             |
++## | vol_wind_strong  | 0.10             | 0.25             | 0.60             | 0.90             |
++## | vol_eerie        | 0                | 0                | 0.70             | 0.30             |
++##
++## sky_color is the sky's horizon and also the fog, background and ambient light colour: distant
++## forms dissolve into it and shadows take the pale overcast light. zenith_color is the sky's top.
++## `ambient` (ambient energy) and `sun_color` are extras beyond the brief's list, there to keep the
++## shadowed late climb (0.8-0.95, on the side away from the low sun) readable.
++
++const KEYS := [
++	{
++		"at": 0.0,  # ASCENT: quiet, lonely, heavy wind, thick fog
++		"wind": 0.7, "wind_swing_deg": 6.0, "fog_density": 0.014, "mist": 0.35,
++		"lightning_per_min": 0.0, "sun_energy": 1.3, "sun_color": Color(1.0, 0.88, 0.74),
++		"ambient": 0.45, "sky_color": Color(0.56, 0.58, 0.6), "zenith_color": Color(0.34, 0.39, 0.46),
++		"vol_wind": 0.7, "vol_wind_strong": 0.1, "vol_eerie": 0.0,
++	},
++	{
++		"at": 0.28,  # DISCOVERY: the war debris; greyer, a little thicker
++		"wind": 0.85, "wind_swing_deg": 8.0, "fog_density": 0.017, "mist": 0.45,
++		"lightning_per_min": 0.0, "sun_energy": 1.1, "sun_color": Color(0.95, 0.86, 0.76),
++		"ambient": 0.5, "sky_color": Color(0.52, 0.54, 0.56), "zenith_color": Color(0.31, 0.35, 0.41),
++		"vol_wind": 0.75, "vol_wind_strong": 0.25, "vol_eerie": 0.0,
++	},
++	{
++		"at": 0.57,  # EERIE: thickest fog, cold light, shifting wind, distant lightning
++		"wind": 1.15, "wind_swing_deg": 14.0, "fog_density": 0.028, "mist": 0.8,
++		"lightning_per_min": 2.0, "sun_energy": 0.8, "sun_color": Color(0.8, 0.82, 0.88),
++		"ambient": 0.75, "sky_color": Color(0.42, 0.45, 0.49), "zenith_color": Color(0.23, 0.26, 0.32),
++		"vol_wind": 0.6, "vol_wind_strong": 0.6, "vol_eerie": 0.7,
++	},
++	{
++		"at": 0.86,  # SUMMIT: the wind surges; the sequence owns the thunderclap
++		"wind": 1.45, "wind_swing_deg": 10.0, "fog_density": 0.022, "mist": 0.55,
++		"lightning_per_min": 0.0, "sun_energy": 1.0, "sun_color": Color(0.95, 0.84, 0.7),
++		"ambient": 0.95, "sky_color": Color(0.5, 0.5, 0.52), "zenith_color": Color(0.28, 0.3, 0.36),
++		"vol_wind": 0.5, "vol_wind_strong": 0.9, "vol_eerie": 0.3,
++	},
++]
++## Values that belong to their stretch: they change only after a key, over GATE_RAMP.
++const GATED := ["lightning_per_min", "vol_eerie"]
++## Progress over which a gated value moves to its new key (0.05 is about 35 m of trail).
++const GATE_RAMP := 0.05
++## Seconds for one slow swing of the wind direction, and of its faster ripple.
++const SWING_PERIOD := 41.0
++const RIPPLE_PERIOD := 13.0
++## Mist noise drift in noise-space units per second at wind 1.0 (as in the playground).
++const MIST_DRIFT := 0.05
++## The volumetric fog density per unit of depth-fog density (the playground's 0.004 / 0.009).
++const VOLUMETRIC_RATIO := 0.45
++## The mist is thickest from this far below her feet and thins out over the shader's mist_height,
++## so it pools in the drops and hollows around her and only wisps about her ankles.
++const MIST_BASE_BELOW := 4.0
++
++@export var wind: Wind
++@export var sun: DirectionalLight3D
++@export var world_environment: WorldEnvironment
++## A FogVolume with the ground_mist shader; it is kept centred on `follow`.
++@export var mist: FogVolume
++@export var storm: Storm
++## Who the mist follows (the girl).
++@export var follow: Node3D
++## The Soundscape (Task 4). Optional: without it the mood is silent.
++@export var soundscape: Node
++
++## The mood applied last.
++var current: Dictionary = {}
++
++var _time := 0.0
++var _mist_offset := Vector3.ZERO
++var _base_direction := 0.0
++
++
++func _ready() -> void:
++	if wind:
++		_base_direction = wind.direction_degrees
++
++
++func _process(delta: float) -> void:
++	_time += delta
++	if mist == null:
++		return
++	if follow:
++		mist.global_position = follow.global_position
++		mist.material.set_shader_parameter("base_height", follow.global_position.y - MIST_BASE_BELOW)
++	if wind:
++		# Integrated, not TIME * speed, so a change of wind never makes the mist jump.
++		var drift := wind.vector() * wind.strength * MIST_DRIFT * delta
++		_mist_offset -= Vector3(drift.x, 0.0, drift.y)
++		mist.material.set_shader_parameter("offset", _mist_offset)
++
++
++## The mood at `progress` (0..1): a smoothstep blend of the two keys around it, colours lerped;
++## the GATED values switch in after their key (see the class comment).
++static func sample(progress: float) -> Dictionary:
++	var p := clampf(progress, 0.0, 1.0)
++	var i := 0
++	while i < KEYS.size() - 1 and p >= KEYS[i + 1].at:
++		i += 1
++	var a: Dictionary = KEYS[i]
++	var out := a.duplicate()
++	out.at = p
++	if i < KEYS.size() - 1:
++		var b: Dictionary = KEYS[i + 1]
++		var t := smoothstep(a.at, b.at, p)
++		for key: String in a:
++			if key != "at" and key not in GATED:
++				out[key] = _mix(a[key], b[key], t)
++	if i > 0:
++		var before: Dictionary = KEYS[i - 1]
++		var g := smoothstep(a.at, a.at + GATE_RAMP, p)
++		for key: String in GATED:
++			out[key] = lerpf(before[key], a[key], g)
++	return out
++
++
++## Drives every system from `mood` (a `sample()` result) and remembers it as `current`.
++func apply(mood: Dictionary) -> void:
++	current = mood
++	if wind:
++		wind.strength = mood.wind
++		var swing := 0.7 * sin(_time * TAU / SWING_PERIOD) + 0.3 * sin(_time * TAU / RIPPLE_PERIOD + 1.3)
++		wind.direction_degrees = fposmod(_base_direction + mood.wind_swing_deg * swing, 360.0)
++	if sun:
++		sun.light_energy = mood.sun_energy
++		sun.light_color = mood.sun_color
++	var env: Environment = world_environment.environment if world_environment else null
++	var sky: ShaderMaterial = null
++	if env:
++		env.fog_density = mood.fog_density
++		env.volumetric_fog_density = mood.fog_density * VOLUMETRIC_RATIO
++		env.fog_light_color = mood.sky_color
++		env.background_color = mood.sky_color
++		env.ambient_light_color = mood.sky_color
++		env.ambient_light_energy = mood.ambient
++		if env.sky and env.sky.sky_material is ShaderMaterial:
++			sky = env.sky.sky_material
++			sky.set_shader_parameter("horizon_color", mood.sky_color)
++			sky.set_shader_parameter("zenith_color", mood.zenith_color)
++	if mist:
++		mist.material.set_shader_parameter("density", mood.mist)
++	if storm:
++		storm.rate_per_min = mood.lightning_per_min
++		storm.light(sun, env, sky)
++	if soundscape and soundscape.has_method("set_volumes"):
++		soundscape.set_volumes(mood.vol_wind, mood.vol_wind_strong, mood.vol_eerie)
++
++
++static func _mix(a: Variant, b: Variant, t: float) -> Variant:
++	if a is Color:
++		return (a as Color).lerp(b, t)
++	return lerpf(a, b, t)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/storm.gd scripts/levels/storm.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/storm.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/levels/storm.gd	2026-11-08 16:15:37.416325300 +0800
+@@ -0,0 +1,84 @@
++class_name Storm
++extends Node
++## The distant storm: soft lightning flickers far off in the fog, never a strike near her.
++## Flashes come at random (Poisson) times at `rate_per_min`, which the MoodDirector sets from the
++## mood. A flash only brightens the light the scene already has: a little sun and ambient energy
++## and a paler sky and fog for 0.15-0.35 s, with no bolt, no light near her and no sound of its
++## own. It emits `flashed` with the delay until its thunder, which the soundscape plays later.
++##
++## The flicker reaches the lights through `light()`, which the MoodDirector calls after it has
++## set the mood's values each frame, so the flash adds to the mood instead of fighting it.
++
++## Emitted at each flash with the seconds until its thunder (2.5-6.0: a few km away).
++signal flashed(delay_s: float)
++
++const THUNDER_MIN := 2.5
++const THUNDER_MAX := 6.0
++## Shortest and longest flicker, in seconds.
++const FLASH_MIN := 0.15
++const FLASH_MAX := 0.35
++## What a flash adds at full glow. Kept small: lightning seen through fog from far away.
++const SUN_BOOST := 0.45
++const AMBIENT_BOOST := 0.5
++## How far the sky horizon and the fog colour move toward FLASH_SKY at full glow.
++const SKY_MIX := 0.35
++const FLASH_SKY := Color(0.86, 0.89, 0.96)
++
++## Mean flashes per minute (0 = no lightning). Set by the MoodDirector.
++var rate_per_min := 0.0
++## Flashes since the last reset.
++var flash_count := 0
++## The flicker's current brightness, 0..1 (0 between flashes).
++var glow := 0.0
++
++var _t := -1.0  # seconds into the current flash; < 0 when no flash is running
++var _length := 0.0
++var _flickers := 2.0
++var _peak := 1.0
++
++
++func _process(delta: float) -> void:
++	if _t >= 0.0:
++		_t += delta
++		if _t >= _length:
++			_t = -1.0
++			glow = 0.0
++		else:
++			# A decaying flicker: 2-3 bright pulses fading over the flash.
++			var k := _t / _length
++			glow = _peak * (1.0 - k) * (0.5 + 0.5 * absf(cos(k * PI * _flickers)))
++	elif rate_per_min > 0.0 and randf() < rate_per_min / 60.0 * delta:
++		flash()
++
++
++## One distant flash now; emits `flashed` with the thunder delay.
++func flash() -> void:
++	flash_count += 1
++	_length = randf_range(FLASH_MIN, FLASH_MAX)
++	_flickers = float(randi_range(2, 3))
++	_peak = randf_range(0.7, 1.0)
++	_t = 0.0
++	glow = _peak
++	flashed.emit(randf_range(THUNDER_MIN, THUNDER_MAX))
++
++
++## Adds the current flicker on top of the lights the mood has just set. Call after the mood.
++func light(sun: DirectionalLight3D, env: Environment, sky: ShaderMaterial) -> void:
++	if glow <= 0.0:
++		return
++	if sun:
++		sun.light_energy += glow * SUN_BOOST
++	if env:
++		env.ambient_light_energy += glow * AMBIENT_BOOST
++		env.fog_light_color = env.fog_light_color.lerp(FLASH_SKY, glow * SKY_MIX)
++	if sky:
++		var horizon: Color = sky.get_shader_parameter("horizon_color")
++		sky.set_shader_parameter("horizon_color", horizon.lerp(FLASH_SKY, glow * SKY_MIX))
++
++
++## Back to a silent sky: no running flash, no rate, count cleared.
++func reset() -> void:
++	rate_per_min = 0.0
++	flash_count = 0
++	glow = 0.0
++	_t = -1.0
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn scenes/levels/heavens_call.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn	2026-11-08 16:12:25.895744600 +0800
++++ scenes/levels/heavens_call.tscn	2026-11-08 16:20:42.593387200 +0800
+@@ -1,19 +1,22 @@
+ [gd_scene format=3]
+ 
+ [ext_resource type="Script" path="res://scripts/levels/heavens_call.gd" id="1"]
+ [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="2"]
+ [ext_resource type="Script" path="res://scripts/camera/follow_camera.gd" id="3"]
+ [ext_resource type="Script" path="res://scripts/environment/wind.gd" id="4"]
+ [ext_resource type="Shader" path="res://assets/shaders/gradient_sky.gdshader" id="5"]
+ [ext_resource type="Script" path="res://scripts/levels/trail.gd" id="6"]
+ [ext_resource type="Script" path="res://scripts/levels/mountain_terrain.gd" id="7"]
++[ext_resource type="Script" path="res://scripts/levels/mood_director.gd" id="8"]
++[ext_resource type="Script" path="res://scripts/levels/storm.gd" id="9"]
++[ext_resource type="Shader" path="res://assets/shaders/ground_mist.gdshader" id="10"]
+ 
+ [sub_resource type="ShaderMaterial" id="sky_material"]
+ shader = ExtResource("5")
+ shader_parameter/horizon_color = Color(0.6, 0.62, 0.63, 1)
+ shader_parameter/zenith_color = Color(0.36, 0.42, 0.5, 1)
+ shader_parameter/glow_size = 0.25
+ shader_parameter/glow_energy = 0.48
+ 
+ [sub_resource type="Sky" id="sky"]
+ sky_material = SubResource("sky_material")
+@@ -39,20 +42,38 @@
+ fog_height = 1.5
+ fog_height_density = 0.06
+ volumetric_fog_enabled = true
+ volumetric_fog_density = 0.004
+ volumetric_fog_albedo = Color(0.78, 0.85, 0.95, 1)
+ volumetric_fog_anisotropy = 0.45
+ volumetric_fog_length = 80.0
+ volumetric_fog_ambient_inject = 0.2
+ volumetric_fog_sky_affect = 0.0
+ 
++[sub_resource type="FastNoiseLite" id="mist_noise"]
++frequency = 0.05
++fractal_octaves = 3
++
++[sub_resource type="NoiseTexture3D" id="mist_noise_tex"]
++noise = SubResource("mist_noise")
++seamless = true
++
++[sub_resource type="ShaderMaterial" id="mist_material"]
++shader = ExtResource("10")
++shader_parameter/noise_tex = SubResource("mist_noise_tex")
++shader_parameter/density = 0.35
++shader_parameter/mist_height = 7.0
++shader_parameter/base_height = 0.0
++shader_parameter/noise_scale = 0.035
++shader_parameter/offset = Vector3(0, 0, 0)
++shader_parameter/albedo = Color(0.82, 0.88, 0.96, 1)
++
+ [sub_resource type="Curve3D" id="trail_curve"]
+ bake_interval = 0.5
+ _data = {
+ "points": PackedVector3Array(-0.000, -0.000, -0.000, 0.000, 0.000, 0.000, 148.624, 0.000, -12.280, 0.215, -0.103, 1.316, -0.215, 0.103, -1.316, 148.034, 0.300, -16.236, 0.252, -0.107, 1.309, -0.252, 0.107, -1.309, 147.332, 0.620, -20.174, 0.290, -0.107, 1.301, -0.290, 0.107, -1.301, 146.519, 0.940, -24.090, 0.327, -0.107, 1.292, -0.327, 0.107, -1.292, 145.594, 1.260, -27.981, 0.364, -0.107, 1.282, -0.364, 0.107, -1.282, 144.558, 1.580, -31.845, 0.402, -0.107, 1.271, -0.402, 0.107, -1.271, 143.409, 1.900, -35.676, 0.442, -0.107, 1.258, -0.442, 0.107, -1.258, 142.144, 2.220, -39.471, 0.485, -0.107, 1.242, -0.485, 0.107, -1.242, 140.758, 2.540, -43.223, 0.534, -0.107, 1.221, -0.534, 0.107, -1.221, 139.236, 2.860, -46.922, 0.598, -0.107, 1.191, -0.598, 0.107, -1.191, 137.552, 3.180, -50.549, 0.688, -0.107, 1.140, -0.688, 0.107, -1.140, 135.650, 3.500, -54.067, 0.790, -0.293, 1.072, -0.790, 0.293, -1.072, 133.425, 3.820, -57.388, 0.852, -0.507, 1.025, -0.852, 0.507, -1.025, 130.912, 5.260, -60.500, 0.881, -0.533, 1.001, -0.881, 0.533, -1.001, 128.312, 6.860, -63.540, 0.909, -0.533, 0.975, -0.909, 0.533, -0.975, 125.627, 8.460, -66.505, 0.937, -0.533, 0.949, -0.937, 0.533, -0.949, 122.858, 10.060, -69.391, 0.964, -0.533, 0.921, -0.964, 0.533, -0.921, 120.007, 11.660, -72.197, 0.990, -0.533, 0.893, -0.990, 0.533, -0.893, 117.075, 13.260, -74.918, 1.016, -0.533, 0.863, -1.016, 0.533, -0.863, 114.065, 14.860, -77.552, 1.041, -0.533, 0.833, -1.041, 0.533, -0.833, 110.979, 16.460, -80.096, 1.066, -0.533, 0.801, -1.066, 0.533, -0.801, 107.818, 18.060, -82.548, 1.089, -0.533, 0.769, -1.089, 0.533, -0.769, 104.586, 19.660, -84.903, 1.112, -0.533, 0.736, -1.112, 0.533, -0.736, 101.284, 21.260, -87.161, 1.134, -0.533, 0.701, -1.134, 0.533, -0.701, 97.915, 22.860, -89.317, 1.155, -0.533, 0.666, -1.155, 0.533, -0.666, 94.481, 24.460, -91.369, 1.175, -0.533, 0.630, -1.175, 0.533, -0.630, 90.986, 26.060, -93.314, 1.194, -0.533, 0.593, -1.194, 0.533, -0.593, 87.433, 27.660, -95.150, 1.212, -0.533, 0.555, -1.212, 0.533, -0.555, 83.823, 29.260, -96.873, 1.229, -0.533, 0.517, -1.229, 0.533, -0.517, 80.161, 30.860, -98.482, 1.245, -0.533, 0.477, -1.245, 0.533, -0.477, 76.450, 32.460, -99.974, 1.259, -0.533, 0.437, -1.259, 0.533, -0.437, 72.693, 34.060, -101.346, 1.273, -0.533, 0.396, -1.273, 0.533, -0.396, 68.894, 35.660, -102.597, 1.285, -0.533, 0.354, -1.285, 0.533, -0.354, 65.056, 37.260, -103.723, 1.296, -0.533, 0.312, -1.296, 0.533, -0.312, 61.183, 38.860, -104.723, 1.306, -0.533, 0.269, -1.306, 0.533, -0.269, 57.279, 40.460, -105.595, 1.314, -0.533, 0.225, -1.314, 0.533, -0.225, 53.348, 42.060, -106.336, 1.321, -0.533, 0.181, -1.321, 0.533, -0.181, 49.395, 43.660, -106.944, 1.326, -0.533, 0.136, -1.326, 0.533, -0.136, 45.424, 45.260, -107.419, 1.330, -0.533, 0.090, -1.330, 0.533, -0.090, 41.438, 46.860, -107.757, 1.332, -0.533, 0.044, -1.332, 0.533, -0.044, 37.443, 48.460, -107.959, 1.333, -0.533, -0.002, -1.333, 0.533, 0.002, 33.444, 50.060, -108.021, 1.332, -0.533, -0.049, -1.332, 0.533, 0.049, 29.445, 51.660, -107.944, 1.330, -0.533, -0.097, -1.330, 0.533, 0.097, 25.451, 53.260, -107.725, 1.325, -0.533, -0.144, -1.325, 0.533, 0.144, 21.468, 54.860, -107.364, 1.319, -0.533, -0.192, -1.319, 0.533, 0.192, 17.500, 56.460, -106.860, 1.311, -0.533, -0.241, -1.311, 0.533, 0.241, 13.553, 58.060, -106.211, 1.302, -0.533, -0.286, -1.302, 0.533, 0.286, 9.633, 59.660, -105.417, 1.297, -0.533, -0.310, -1.297, 0.533, 0.310, 5.741, 61.260, -104.494, 1.296, -0.533, -0.313, -1.296, 0.533, 0.313, 1.853, 62.860, -103.554, 1.296, -0.533, -0.312, -1.296, 0.533, 0.312, -2.036, 64.460, -102.615, 1.295, -0.533, -0.317, -1.295, 0.533, 0.317, -5.925, 66.060, -101.680, 1.288, -0.533, -0.345, -1.288, 0.533, 0.345, -9.806, 67.660, -100.715, 1.274, -0.533, -0.393, -1.274, 0.533, 0.393, -13.651, 69.260, -99.611, 1.257, -0.533, -0.442, -1.257, 0.533, 0.442, -17.449, 70.860, -98.358, 1.239, -0.533, -0.492, -1.239, 0.533, 0.492, -21.195, 72.460, -96.956, 1.218, -0.533, -0.541, -1.218, 0.533, 0.541, -24.883, 74.060, -95.407, 1.196, -0.533, -0.589, -1.196, 0.533, 0.589, -28.506, 75.660, -93.712, 1.171, -0.533, -0.637, -1.171, 0.533, 0.637, -32.057, 77.260, -91.872, 1.144, -0.533, -0.684, -1.144, 0.533, 0.684, -35.531, 78.860, -89.890, 1.115, -0.533, -0.730, -1.115, 0.533, 0.730, -38.921, 80.460, -87.768, 1.085, -0.533, -0.774, -1.085, 0.533, 0.774, -42.223, 82.060, -85.510, 1.055, -0.533, -0.815, -1.055, 0.533, 0.815, -45.433, 83.660, -83.124, 1.026, -0.533, -0.852, -1.026, 0.533, 0.852, -48.552, 85.260, -80.619, 1.002, -0.533, -0.879, -1.002, 0.533, 0.879, -51.587, 86.860, -78.014, 0.992, -0.533, -0.891, -0.992, 0.533, 0.891, -54.564, 88.460, -75.343, 1.010, -0.533, -0.870, -1.010, 0.533, 0.870, -57.539, 90.060, -72.668, 1.035, -0.533, -0.840, -1.035, 0.533, 0.840, -60.624, 91.660, -70.124, 1.022, -0.533, -0.855, -1.022, 0.533, 0.855, -63.749, 93.260, -67.628, 0.982, -0.533, -0.901, -0.982, 0.533, 0.901, -66.758, 94.860, -64.993, 0.940, -0.533, -0.945, -0.940, 0.533, 0.945, -69.643, 96.460, -62.223, 0.896, -0.533, -0.986, -0.896, 0.533, 0.986, -72.400, 98.060, -59.325, 0.851, -0.533, -1.026, -0.851, 0.533, 1.026, -75.022, 99.660, -56.305, 0.803, -0.533, -1.064, -0.803, 0.533, 1.064, -77.504, 101.260, -53.169, 0.754, -0.533, -1.099, -0.754, 0.533, 1.099, -79.841, 102.860, -49.923, 0.703, -0.533, -1.132, -0.703, 0.533, 1.132, -82.028, 104.460, -46.574, 0.651, -0.533, -1.163, -0.651, 0.533, 1.163, -84.060, 106.060, -43.129, 0.597, -0.533, -1.192, -0.597, 0.533, 1.192, -85.933, 107.660, -39.595, 0.542, -0.533, -1.218, -0.542, 0.533, 1.218, -87.644, 109.260, -35.979, 0.486, -0.533, -1.241, -0.486, 0.533, 1.241, -89.188, 110.860, -32.290, 0.441, -0.533, -1.258, -0.441, 0.533, 1.258, -90.562, 112.460, -28.534, 0.455, -0.353, -1.249, -0.455, 0.353, 1.249, -91.835, 114.060, -24.743, 0.186, -0.113, -1.275, -0.186, 0.113, 1.275, -93.292, 114.580, -21.040, -0.422, -0.053, -1.207, 0.422, 0.053, 1.207, -92.951, 114.740, -17.095, -0.949, -0.053, -0.857, 0.949, 0.053, 0.857, -90.760, 114.900, -13.797, -1.244, -0.053, -0.297, 1.244, 0.053, 0.297, -87.257, 115.060, -11.953, -1.234, -0.053, 0.335, 1.234, 0.053, -0.335, -83.298, 115.220, -12.014, -0.938, -0.143, 0.879, 0.938, 0.143, -0.879, -79.853, 115.380, -13.966, -0.686, -0.383, 1.137, 0.686, 0.383, -1.137, -77.671, 116.080, -17.288, -0.675, -0.533, 1.149, 0.675, 0.533, -1.149, -75.737, 117.680, -20.789, -0.735, -0.533, 1.112, 0.735, 0.533, -1.112, -73.619, 119.280, -24.182, -0.792, -0.533, 1.072, 0.792, 0.533, -1.072, -71.325, 120.880, -27.458, -0.843, -0.533, 1.032, 0.843, 0.533, -1.032, -68.868, 122.480, -30.614, -0.885, -0.533, 0.997, 0.885, 0.533, -0.997, -66.268, 124.080, -33.653, -0.910, -0.533, 0.974, 0.910, 0.533, -0.974, -63.558, 125.680, -36.596, -0.904, -0.533, 0.980, 0.904, 0.533, -0.980, -60.805, 127.280, -39.497, -0.891, -0.533, 0.992, 0.891, 0.533, -0.992, -58.134, 128.880, -42.474, -0.920, -0.533, 0.964, 0.920, 0.533, -0.964, -55.461, 130.480, -45.449, -0.977, -0.533, 0.906, 0.977, 0.533, -0.906, -52.613, 132.080, -48.257, -1.030, -0.533, 0.846, 1.030, 0.533, -0.846, -49.600, 133.680, -50.887, -1.079, -0.533, 0.782, 1.079, 0.533, -0.782, -46.433, 135.280, -53.330, -1.125, -0.533, 0.715, 1.125, 0.533, -0.715, -43.124, 136.880, -55.576, -1.166, -0.533, 0.645, 1.166, 0.533, -0.645, -39.686, 138.480, -57.619, -1.203, -0.533, 0.574, 1.203, 0.533, -0.574, -36.130, 140.080, -59.449, -1.235, -0.533, 0.500, 1.235, 0.533, -0.500, -32.469, 141.680, -61.060, -1.263, -0.533, 0.424, 1.263, 0.533, -0.424, -28.718, 143.280, -62.447, -1.287, -0.533, 0.347, 1.287, 0.533, -0.347, -24.890, 144.880, -63.604, -1.305, -0.533, 0.268, 1.305, 0.533, -0.268, -20.998, 146.480, -64.526, -1.319, -0.533, 0.188, 1.319, 0.533, -0.188, -17.058, 148.080, -65.211, -1.325, -0.533, 0.141, 1.325, 0.533, -0.141, -13.083, 149.680, -65.656, -1.320, -0.323, 0.140, 1.320, 0.323, -0.140, -9.108, 151.280, -66.055, -1.271, -0.083, -0.169, 1.271, 0.083, 0.169, -5.164, 151.620, -66.496, -1.036, -0.053, -0.749, 1.036, 0.053, 0.749, -1.481, 151.780, -65.043, -0.550, -0.053, -1.154, 0.550, 0.053, 1.154, 1.054, 151.940, -62.002, 0.070, -0.053, -1.277, -0.070, 0.053, 1.277, 1.821, 152.100, -58.118, 0.674, -0.053, -1.087, -0.674, 0.053, 1.087, 0.632, 152.260, -54.341, 1.107, -0.173, -0.661, -1.107, 0.173, 0.661, -2.222, 152.420, -51.597, 1.277, -0.413, -0.369, -1.277, 0.413, 0.369, -6.012, 153.300, -50.373, 1.277, -0.533, -0.378, -1.277, 0.533, 0.378, -9.886, 154.900, -49.381, 1.244, -0.533, -0.476, -1.244, 0.533, 0.476, -13.676, 156.500, -48.104, 1.201, -0.533, -0.575, -1.201, 0.533, 0.575, -17.350, 158.100, -46.526, 1.150, -0.533, -0.672, -1.150, 0.533, 0.672, -20.884, 159.700, -44.655, 1.089, -0.533, -0.766, -1.089, 0.533, 0.766, -24.250, 161.300, -42.495, 1.019, -0.533, -0.857, -1.019, 0.533, 0.857, -27.419, 162.900, -40.057, 0.940, -0.533, -0.943, -0.940, 0.533, 0.943, -30.365, 164.500, -37.353, 0.852, -0.533, -1.023, -0.852, 0.533, 1.023, -33.060, 166.100, -34.399, 0.754, -0.533, -1.097, -0.754, 0.533, 1.097, -35.476, 167.700, -31.212, 0.648, -0.533, -1.163, -0.648, 0.533, 1.163, -37.586, 169.300, -27.816, 0.534, -0.533, -1.220, -0.534, 0.533, 1.220, -39.366, 170.900, -24.235, 0.412, -0.533, -1.266, -0.412, 0.533, 1.266, -40.789, 172.500, -20.499, 0.282, -0.533, -1.301, -0.282, 0.533, 1.301, -41.835, 174.100, -16.640, 0.147, -0.533, -1.323, -0.147, 0.533, 1.323, -42.484, 175.700, -12.695, 0.007, -0.533, -1.331, -0.007, 0.533, 1.331, -42.719, 177.300, -8.703, -0.136, -0.533, -1.324, 0.136, 0.533, 1.324, -42.528, 178.900, -4.710, -0.280, -0.533, -1.301, 0.280, 0.533, 1.301, -41.905, 180.500, -0.761, -0.422, -0.533, -1.262, 0.422, 0.533, 1.262, -40.850, 182.100, 3.096, -0.557, -0.533, -1.208, 0.557, 0.533, 1.208, -39.376, 183.700, 6.812, -0.681, -0.533, -1.144, 0.681, 0.533, 1.144, -37.506, 185.300, 10.346, -0.783, -0.533, -1.077, 0.783, 0.533, 1.077, -35.290, 186.900, 13.674, -0.843, -0.533, -1.032, 0.843, 0.533, 1.032, -32.808, 188.500, 16.810, -0.727, -0.533, -1.103, 0.727, 0.533, 1.103, -30.230, 190.100, 19.868, -0.416, -0.533, -1.249, 0.416, 0.533, 1.249, -28.446, 191.700, 23.427, -0.254, -0.533, -1.308, 0.254, 0.533, 1.308, -27.736, 193.300, 27.359, -0.321, -0.533, -1.293, 0.321, 0.533, 1.293, -26.924, 194.900, 31.274, -0.417, -0.533, -1.265, 0.417, 0.533, 1.265, -25.809, 196.500, 35.115, -0.504, -0.533, -1.233, 0.504, 0.533, 1.233, -24.421, 198.100, 38.866, -0.659, -0.533, -1.148, 0.659, 0.533, 1.148, -22.783, 199.700, 42.514, -0.927, -0.533, -0.924, 0.927, 0.533, 0.924, -20.467, 201.300, 45.753, -1.179, -0.533, -0.569, 1.179, 0.533, 0.569, -17.219, 202.900, 48.056, -1.300, -0.533, -0.152, 1.300, 0.533, 0.152, -13.396, 204.500, 49.169, -1.278, -0.533, 0.281, 1.278, 0.533, -0.281, -9.419, 206.100, 48.970, -1.116, -0.533, 0.684, 1.116, 0.533, -0.684, -5.726, 207.700, 47.481, -0.831, -0.533, 1.012, 0.831, 0.533, -1.012, -2.724, 209.300, 44.866, -0.454, -0.533, 1.228, 0.454, 0.533, -1.228, -0.742, 210.900, 41.412, -0.124, -0.467, 1.319, 0.124, 0.467, -1.319, 0.000, 212.500, 37.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 213.700, 33.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 214.900, 29.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 216.100, 25.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 217.300, 21.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 218.500, 17.500, -0.000, -0.250, 1.333, 0.000, 0.250, -1.333, 0.000, 219.700, 13.500, -0.000, -0.050, 1.333, 0.000, 0.050, -1.333, 0.000, 220.000, 9.500, -0.000, -0.000, 1.333, 0.000, 0.000, -1.333, 0.000, 220.000, 5.500, -0.000, -0.000, 0.917, 0.000, 0.000, -0.917, 0.000, 220.000, 1.500, -0.000, -0.000, -0.000, 0.000, 0.000, 0.000, 0.000, 220.000, 0.000),
+ "tilts": PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+ }
+ point_count = 165
+ 
+ [node name="HeavensCall" type="Node3D"]
+ script = ExtResource("1")
+@@ -85,19 +106,36 @@
+ lantern = false
+ 
+ [node name="GameplayCamera" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
+ current = true
+ fov = 60.0
+ far = 600.0
+ script = ExtResource("3")
+ target = NodePath("../Player")
+ min_pitch = -5.0
+ max_pitch = 45.0
++collision_mask = 2
+ 
+ [node name="UI" type="CanvasLayer" parent="." groups=["overlay"]]
+ layer = 10
+ 
+ [node name="Fade" type="ColorRect" parent="UI"]
+ anchor_right = 1.0
+ anchor_bottom = 1.0
+ mouse_filter = 2
+ color = Color(0, 0, 0, 1)
++
++[node name="Mist" type="FogVolume" parent="."]
++size = Vector3(110, 30, 110)
++material = SubResource("mist_material")
++
++[node name="Storm" type="Node" parent="."]
++script = ExtResource("9")
++
++[node name="MoodDirector" type="Node" parent="." node_paths=PackedStringArray("wind", "sun", "world_environment", "mist", "storm", "follow")]
++script = ExtResource("8")
++wind = NodePath("../Wind")
++sun = NodePath("../Sun")
++world_environment = NodePath("../WorldEnvironment")
++mist = NodePath("../Mist")
++storm = NodePath("../Storm")
++follow = NodePath("../Player")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_mood.gd tests/test_heavens_mood.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_mood.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_heavens_mood.gd	2026-11-08 16:19:12.638118600 +0800
+@@ -0,0 +1,108 @@
++extends "res://tests/case.gd"
++## Heavens call mood and storm: keys per stretch, blending by furthest progress, distant lightning,
++## plus the level's camera terrain collision and the walk-back-down rule.
++
++const SCENE := "res://scenes/levels/heavens_call.tscn"
++
++
++func test_keys_ordered_and_shaped(_lv) -> void:
++	var at := []
++	for k in MoodDirector.KEYS: at.append(k.at)
++	check_eq(at, [0.0, 0.28, 0.57, 0.86], "stretch boundaries")
++	check_eq(MoodDirector.KEYS[0].lightning_per_min, 0.0, "no lightning in ascent")
++	check_eq(MoodDirector.KEYS[1].lightning_per_min, 0.0, "no lightning in discovery")
++	check(MoodDirector.KEYS[2].lightning_per_min > 0.0, "lightning in eerie")
++	check(MoodDirector.KEYS[0].vol_eerie == 0.0 and MoodDirector.KEYS[1].vol_eerie == 0.0, "eerie ambience only from stretch 3")
++	check(MoodDirector.KEYS[3].wind > MoodDirector.KEYS[0].wind, "wind builds")
++
++
++func test_sample_blends_between_keys(_lv) -> void:
++	var a: float = MoodDirector.sample(0.28).wind
++	var b: float = MoodDirector.sample(0.57).wind
++	var mid: float = MoodDirector.sample(0.425).wind
++	check(mid > minf(a, b) - 0.001 and mid < maxf(a, b) + 0.001, "blend stays between keys")
++
++
++func test_mood_ignores_backtracking(lv) -> void:
++	lv.player.global_position = lv.trail.point_at(0.7)
++	await frames(3)
++	var w: float = lv.mood.current.wind
++	lv.player.global_position = lv.trail.point_at(0.1)
++	await frames(3)
++	check_near(lv.mood.current.wind, w, 0.001, "walking back down keeps the mood")
++
++
++func test_no_lightning_before_eerie(lv) -> void:
++	lv.player.global_position = lv.trail.point_at(0.4)
++	await frames(2)
++	check_eq(lv.storm.rate_per_min, 0.0, "storm silent in discovery")
++
++
++func test_flash_schedules_distant_thunder(lv) -> void:
++	var delays := []
++	lv.storm.flashed.connect(func(d: float) -> void: delays.append(d))
++	lv.storm.flash()
++	await frames(1)
++	check(delays.size() == 1 and delays[0] >= 2.5 and delays[0] <= 6.0, "thunder 2.5-6 s after flash")
++
++
++## The mood follows the furthest point reached: at 0.7 it is the eerie blend, and the storm runs.
++func test_mood_follows_furthest_progress(lv) -> void:
++	lv.furthest_progress = 0.7
++	await frames(2)
++	var want: Dictionary = MoodDirector.sample(0.7)
++	check_near(lv.mood.current.wind, want.wind, 0.001, "mood applied from furthest progress")
++	check_near(lv.storm.rate_per_min, want.lightning_per_min, 0.001, "storm rate from the mood")
++	check_near(lv.wind.strength, want.wind, 0.001, "Wind node driven by the mood")
++
++
++func test_reset_clears_mood_and_storm(lv) -> void:
++	lv.furthest_progress = 0.7
++	await frames(2)
++	lv.storm.flash()
++	lv.reset_scene()
++	check_eq(lv.storm.flash_count, 0, "flash count reset")
++	check_near(lv.mood.current.wind, MoodDirector.KEYS[0].wind, 0.001, "mood back at the ascent key")
++	check_eq(lv.storm.rate_per_min, 0.0, "storm silent after reset")
++
++
++func test_walking_down_never_respawns(lv) -> void:
++	lv.furthest_progress = 0.6
++	var spot: Vector3 = lv.trail.point_at(0.3) + Vector3.UP
++	lv.player.global_position = spot
++	await frames(4)
++	check(lv.player.global_position.distance_to(spot) < 1.0, "she stays where she walked down to")
++	check_near(lv.furthest_progress, 0.6, 0.001, "furthest progress kept")
++
++
++## Ruling 3: with the camera goal behind the mountain, the camera pulls in to the near side.
++func test_camera_stays_out_of_terrain(lv) -> void:
++	var cam: FollowCamera = lv.follow_cam
++	check_eq(cam.collision_mask, 2, "level camera collides with the ground layer")
++	lv.player.global_position = lv.trail.point_at(0.3) + Vector3.UP
++	cam.pitch_deg = 0.0
++	cam.distance = 25.0
++	cam.snap()
++	await frames(2)
++	var space: PhysicsDirectSpaceState3D = lv.get_world_3d().direct_space_state
++	var pivot: Vector3 = lv.player.global_position + Vector3.UP * cam.height
++	# Find a yaw whose uncollided goal lies behind a terrain wall.
++	var blocked_yaw := INF
++	for i in 36:
++		var yaw := i * 10.0
++		var off := Basis.from_euler(Vector3(0.0, deg_to_rad(yaw), 0.0)) * Vector3.BACK * cam.distance
++		var q := PhysicsRayQueryParameters3D.create(pivot, pivot + off, 2)
++		if not space.intersect_ray(q).is_empty():
++			blocked_yaw = yaw
++			break
++	check(blocked_yaw != INF, "found a camera direction blocked by the mountain")
++	if blocked_yaw == INF:
++		return
++	cam.yaw_deg = blocked_yaw
++	await frames(20)
++	pivot = lv.player.global_position + Vector3.UP * cam.height
++	var q2 := PhysicsRayQueryParameters3D.create(pivot, cam.global_position, 2)
++	check(space.intersect_ray(q2).is_empty(), "no ground between her and the camera")
++	check(cam.global_position.distance_to(pivot) < cam.distance - 0.5, "camera pulled in")
++	cam.distance = 7.0
++	cam.pitch_deg = 14.0
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/assets/shaders/ground_mist.gdshader assets/shaders/ground_mist.gdshader
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/assets/shaders/ground_mist.gdshader	2026-11-08 16:12:26.210819200 +0800
++++ assets/shaders/ground_mist.gdshader	2026-11-08 16:18:20.440925700 +0800
+@@ -1,21 +1,23 @@
+ // Low drifting mist for a FogVolume. Patchy noise, thickest at ground level, fading out
+ // toward the volume's edges. `offset` is advanced by the playground from wind each frame
+ // (so changing wind speed never makes the mist jump).
+ shader_type fog;
+ 
+ uniform sampler3D noise_tex : repeat_enable;
+ uniform float density : hint_range(0.0, 4.0) = 0.5;
+ uniform float mist_height = 2.0;
++// World height the mist is thickest at and below (0 = the playground's ground plane).
++uniform float base_height = 0.0;
+ uniform float noise_scale = 0.035;
+ uniform vec3 offset = vec3(0.0);
+ uniform vec4 albedo : source_color = vec4(1.0);
+ 
+ void fog() {
+ 	vec3 p = WORLD_POSITION * noise_scale + offset;
+ 	float n = texture(noise_tex, p).r;
+ 	float patches = smoothstep(0.45, 0.8, n);
+-	float height = 1.0 - smoothstep(0.0, mist_height, WORLD_POSITION.y);
++	float height = 1.0 - smoothstep(base_height, base_height + mist_height, WORLD_POSITION.y);
+ 	vec3 edge = smoothstep(vec3(0.0), vec3(0.08), UVW) * smoothstep(vec3(1.0), vec3(0.92), UVW);
+ 	DENSITY = density * patches * height * edge.x * edge.z;
+ 	ALBEDO = albedo.rgb;
+ }
+# new/changed binary or audio files:

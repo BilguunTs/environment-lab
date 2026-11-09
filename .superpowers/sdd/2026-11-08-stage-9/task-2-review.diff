@@ -1,0 +1,176 @@
+# Task 2 review package (diff pre-task snapshot -> current, --strip-trailing-cr)
+# NOTE from controller: scenes/playground.tscn was LF before this task and is CRLF now (whole-file line-ending change; content change is the hunk below).
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/environment/kit_asset.gd scripts/environment/kit_asset.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/environment/kit_asset.gd	2026-11-08 11:28:05.900129500 +0800
++++ scripts/environment/kit_asset.gd	2026-11-08 11:28:43.105812400 +0800
+@@ -1,31 +1,57 @@
+ @tool
+ extends Node3D
+ ## Root of a kit asset scene (scenes/environment/kit/). Replaces every imported material
+ ## with the palette material of the same name (res://assets/materials/<name>.tres), so
+ ## Blender only has to name materials correctly; colour and shading live in Godot.
+ 
+ const PALETTE_DIR := "res://assets/materials/"
++## Walkable ground is on layer 1 (world) + layer 2 (ground); grass rays against layer 2 only.
++const GROUND_LAYERS := 3
++
++## Adds trimesh collision on the ground layers (for terrain pieces such as mounds).
++@export var collision := false
+ 
+ 
+ func _ready() -> void:
+ 	_apply_palette(self)
++	if collision:
++		_build_collision()
+ 
+ 
+ func _apply_palette(node: Node) -> void:
+ 	var instance := node as MeshInstance3D
+ 	if instance and instance.mesh:
+ 		for i in instance.mesh.get_surface_count():
+ 			var source: Material = instance.mesh.surface_get_material(i)
+ 			if source == null:
+ 				continue
+ 			var path := PALETTE_DIR + source.resource_name + ".tres"
+ 			if ResourceLoader.exists(path):
+ 				instance.set_surface_override_material(i, load(path))
+ 			else:
+ 				push_warning("%s: no palette material '%s'" % [owner_name(), source.resource_name])
+ 	for child in node.get_children():
+ 		_apply_palette(child)
+ 
+ 
++## One static body ("Collision", no owner so it is never saved) with a trimesh per mesh.
++func _build_collision() -> void:
++	if has_node("Collision"):
++		return
++	var body := StaticBody3D.new()
++	body.name = "Collision"
++	body.collision_layer = GROUND_LAYERS
++	add_child(body)
++	var to_local := global_transform.affine_inverse()
++	for instance in find_children("*", "MeshInstance3D", true, false):
++		var mesh_instance := instance as MeshInstance3D
++		if mesh_instance.mesh == null:
++			continue
++		var shape := CollisionShape3D.new()
++		shape.shape = mesh_instance.mesh.create_trimesh_shape()
++		body.add_child(shape)
++		shape.transform = to_local * mesh_instance.global_transform
++
++
+ func owner_name() -> String:
+ 	return scene_file_path.get_file() if scene_file_path else String(name)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scenes/environment/kit/ground_mound_a.tscn scenes/environment/kit/ground_mound_a.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scenes/environment/kit/ground_mound_a.tscn	2026-11-08 11:28:05.928005600 +0800
++++ scenes/environment/kit/ground_mound_a.tscn	2026-11-08 11:28:43.105812400 +0800
+@@ -1,9 +1,10 @@
+ [gd_scene format=3]
+ 
+ [ext_resource type="Script" path="res://scripts/environment/kit_asset.gd" id="1"]
+ [ext_resource type="PackedScene" path="res://assets/meshes/ground_mound_a.glb" id="2"]
+ 
+ [node name="ground_mound_a" type="Node3D"]
+ script = ExtResource("1")
++collision = true
+ 
+ [node name="Model" parent="." instance=ExtResource("2")]
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scenes/environment/kit/ground_mound_b.tscn scenes/environment/kit/ground_mound_b.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scenes/environment/kit/ground_mound_b.tscn	2026-11-08 11:28:05.929018000 +0800
++++ scenes/environment/kit/ground_mound_b.tscn	2026-11-08 11:28:43.105812400 +0800
+@@ -1,9 +1,10 @@
+ [gd_scene format=3]
+ 
+ [ext_resource type="Script" path="res://scripts/environment/kit_asset.gd" id="1"]
+ [ext_resource type="PackedScene" path="res://assets/meshes/ground_mound_b.glb" id="2"]
+ 
+ [node name="ground_mound_b" type="Node3D"]
+ script = ExtResource("1")
++collision = true
+ 
+ [node name="Model" parent="." instance=ExtResource("2")]
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scenes/playground.tscn scenes/playground.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scenes/playground.tscn	2026-11-08 11:28:05.935038200 +0800
++++ scenes/playground.tscn	2026-11-08 11:28:43.105812400 +0800
+@@ -285,20 +285,21 @@
+ environment = SubResource("Environment_1")
+ 
+ [node name="Sun" type="DirectionalLight3D" parent="."]
+ transform = Transform3D(-0.7071, -0.2418, 0.6645, 0, 0.9397, 0.342, -0.7071, 0.2418, -0.6645, 0, 0, 0)
+ light_color = Color(1, 0.88, 0.74, 1)
+ light_energy = 1.6
+ shadow_enabled = true
+ directional_shadow_max_distance = 140.0
+ 
+ [node name="Ground" type="StaticBody3D" parent="."]
++collision_layer = 3
+ 
+ [node name="Mesh" type="MeshInstance3D" parent="Ground"]
+ mesh = SubResource("PlaneMesh_2")
+ material_override = ExtResource("7")
+ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+ 
+ [node name="Shape" type="CollisionShape3D" parent="Ground"]
+ shape = SubResource("WorldBoundaryShape3D_3")
+ 
+ [node name="Path" type="MeshInstance3D" parent="."]
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_ground.gd tests/test_ground.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_ground.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_ground.gd	2026-11-08 11:28:29.465444500 +0800
+@@ -0,0 +1,28 @@
++extends "res://tests/case.gd"
++## Walkable ground (the Ground plane and the terrain mounds) is on physics layers 1 + 2.
++## Grass and the brush ray against layer 2 only; boulders and props are not ground.
++
++
++func _ray(pg, xz: Vector2, mask := 2) -> Dictionary:
++	var q := PhysicsRayQueryParameters3D.create(Vector3(xz.x, 40, xz.y), Vector3(xz.x, -5, xz.y), mask)
++	return pg.get_world_3d().direct_space_state.intersect_ray(q)
++
++
++func test_mounds_are_ground(pg) -> void:
++	await frames(2)
++	var mound: Node3D = pg.get_node("Terrain/Mound1")
++	var hit := _ray(pg, Vector2(mound.global_position.x, mound.global_position.z))
++	check(not hit.is_empty(), "ray on layer 2 hits Mound1")
++	check(hit.get("position", Vector3.ZERO).y > 0.2, "hit is on top of the mound, not the plane")
++
++
++func test_ground_plane_is_ground(pg) -> void:
++	await frames(2)
++	check(not _ray(pg, Vector2(0, 0)).is_empty(), "the Ground plane is on layer 2")
++
++
++func test_boulders_are_not_ground(pg) -> void:
++	await frames(2)
++	var boulder: Node3D = pg.get_node("Hero/Boulder1")
++	var hit := _ray(pg, Vector2(boulder.global_position.x, boulder.global_position.z))
++	check(hit.get("position", Vector3.ONE).y < 0.2, "a layer-2 ray passes through boulders to the ground")
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/project.godot	2026-11-08 11:28:05.973692000 +0800
++++ project.godot	2026-11-08 11:28:43.105812400 +0800
+@@ -57,20 +57,25 @@
+ "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":68,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+ , Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194321,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+ ]
+ }
+ sprint={
+ "deadzone": 0.2,
+ "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194325,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+ ]
+ }
+ 
++[layer_names]
++
++3d_physics/layer_1="world"
++3d_physics/layer_2="ground"
++
+ [rendering]
+ 
+ anti_aliasing/quality/msaa_3d=2
+ 
+ [shader_globals]
+ 
+ wind_strength={
+ "type": "float",
+ "value": 0.6
+ }

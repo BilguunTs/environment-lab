@@ -1,0 +1,643 @@
+# HC Task 7 fix round 1 (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/camera/follow_camera.gd scripts/camera/follow_camera.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/camera/follow_camera.gd	2026-11-08 17:59:49.630967800 +0800
++++ scripts/camera/follow_camera.gd	2026-11-08 18:06:20.506400100 +0800
+@@ -19,56 +19,59 @@
+ @export var max_pitch := 80.0
+ @export var yaw_deg := 0.0
+ @export var follow_smoothing := 6.0
+ @export var mouse_orbit_sensitivity := 0.25
+ @export var key_orbit_speed := 90.0
+ ## Physics layers the camera can't pass through (0 = off). When set, a ray from the look target
+ ## to the camera stops it short of the first hit, so walls never come between her and the view.
+ @export_flags_3d_physics var collision_mask := 0
+ ## Off while a panel text field has focus, so typing Q or E doesn't orbit.
+ var input_enabled := true
++## On while a cutscene owns the camera (the Heavens call summit sequence): mouse orbit, wheel
++## zoom and Q/E are all ignored, so nothing but the cutscene moves it.
++var orbit_locked := false
+ 
+ ## How far in front of a hit the camera stops, in metres.
+ const COLLISION_MARGIN := 0.3
+ ## The camera never pulls in closer than this to the look target.
+ const MIN_DISTANCE := 0.6
+ ## How fast the camera eases back out once a wall stops blocking it (per second).
+ const RETURN_SPEED := 3.0
+ 
+ var _pivot := Vector3.ZERO
+ var _clear_distance := INF  # how far out the camera may be (smoothed); collision only
+ 
+ 
+ func _ready() -> void:
+ 	if target:
+ 		_pivot = _goal()
+ 	_place()
+ 
+ 
+ func _unhandled_input(event: InputEvent) -> void:
+-	if not current:
++	if not current or orbit_locked:
+ 		return
+ 	if event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+ 		yaw_deg -= event.relative.x * mouse_orbit_sensitivity
+ 		pitch_deg += event.relative.y * mouse_orbit_sensitivity
+ 		user_adjusted.emit()
+ 	elif event is InputEventMouseButton and event.pressed:
+ 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+ 			distance = maxf(1.0, distance * 0.9)
+ 			user_adjusted.emit()
+ 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+ 			distance = minf(40.0, distance * 1.1)
+ 			user_adjusted.emit()
+ 
+ 
+ func _process(delta: float) -> void:
+-	if current and input_enabled:
++	if current and input_enabled and not orbit_locked:
+ 		var orbit := float(Input.is_key_pressed(KEY_E)) - float(Input.is_key_pressed(KEY_Q))
+ 		yaw_deg += orbit * key_orbit_speed * delta
+ 	if target:
+ 		_pivot = _pivot.lerp(_goal(), 1.0 - exp(-follow_smoothing * delta))
+ 	_place(delta)
+ 
+ 
+ ## Jump straight to the target, skipping smoothing (used after teleports/resets).
+ func snap() -> void:
+ 	if target:
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/heavens_call.gd	2026-11-08 17:59:49.667844200 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 18:02:54.212079400 +0800
+@@ -62,20 +62,21 @@
+ ## Puts the girl back at the trail start facing up the trail, restarts the fade-in from black,
+ ## and resets the progress, the mood, the storm, the vista (closed: reveal 0) and the summit
+ ## sequence (idle, gameplay camera current, control given back, title hidden).
+ func reset_scene() -> void:
+ 	furthest_progress = 0.0
+ 	_thunder_gen += 1
+ 	_thunder_pending = 0
+ 	_stride_walked = 0.0
+ 	step_count = 0
+ 	summit.reset()
++	soundscape.stop_one_shots()
+ 	storm.reset()
+ 	vista.reveal = 0.0
+ 	mood.apply(MoodDirector.sample(0.0))
+ 	_place_on_trail(0.0)
+ 	_last_pos = player.global_position
+ 	_restart_fade()
+ 
+ 
+ ## Puts her on the trail at `progress`, at rest facing up it, counting it as reached.
+ func place_on_trail(progress: float) -> void:
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/soundscape.gd scripts/levels/soundscape.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/soundscape.gd	2026-11-08 17:59:49.663168800 +0800
++++ scripts/levels/soundscape.gd	2026-11-08 18:01:32.329390800 +0800
+@@ -66,20 +66,31 @@
+ 	wind_strong_loop.volume_db = _to_db(vol_wind_strong)
+ 	ambience_eerie_loop.volume_db = _to_db(vol_eerie)
+ 
+ 
+ ## One distant thunder roll, or the clap.
+ func play_thunder(clap := false) -> void:
+ 	var file := "thunder_clap" if clap else "thunder_distant_%d" % (randi() % DISTANT_COUNT + 1)
+ 	_play(_thunder, load_stream(file))
+ 
+ 
++## Cuts off any thunder roll or clap and footstep still sounding (the level's reset).
++func stop_one_shots() -> void:
++	_thunder.stop()
++	_steps.stop()
++
++
++## Whether a thunder roll or the clap is sounding.
++func thunder_playing() -> bool:
++	return _thunder.playing
++
++
+ ## One footstep: gravel on the trail, rock off it. Never the same file twice in a row.
+ func step(on_trail: bool) -> void:
+ 	last_step_kind = "gravel" if on_trail else "rock"
+ 	var names := step_names(last_step_kind)
+ 	names.erase(_last_step_name)
+ 	_last_step_name = names[randi() % names.size()]
+ 	_play(_steps, load_stream(_last_step_name))
+ 
+ 
+ func _make_loop(file: String) -> AudioStreamPlayer:
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/summit_sequence.gd scripts/levels/summit_sequence.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/summit_sequence.gd	2026-11-08 17:59:49.665838500 +0800
++++ scripts/levels/summit_sequence.gd	2026-11-08 18:02:54.258846600 +0800
+@@ -1,21 +1,24 @@
+ class_name SummitSequence
+ extends Node
+ ## The Heavens call ending. HeavensCall calls start() once, when her furthest progress reaches
+ ## START_PROGRESS; from then on the sequence owns her, the cameras, the reveal and the overlays:
+ ##
+ ## - SLOWING: control is taken away and she eases to a stop, turning to face the vista (-Z),
+-##   while the gameplay camera swings round behind her to look the same way.
+-## - REVEAL: the vista's `reveal` opens 0 -> 1 (the fog parts), the wind surges on top of the
+-##   mood (MoodDirector.wind_surge) and the thunderclap sounds CLAP_AT seconds in.
+-## - PULLBACK: SummitCamera takes over from the gameplay camera's exact transform and cranes back
+-##   and up along an arc until she is a tiny silhouette above the ocean of mist.
++##   while the gameplay camera swings round behind her to look the same way (its mouse orbit,
++##   zoom and Q/E locked: FollowCamera.orbit_locked).
++## - REVEAL: SummitCamera takes over from the gameplay camera's exact transform and rises gently
++##   up and over the summit's rim, so the parting fog and the opening mist sea are watched as
++##   they happen. Meanwhile the vista's `reveal` opens 0 -> 1, the wind surges on top of the mood
++##   (MoodDirector.wind_surge) and the thunderclap sounds CLAP_AT seconds in.
++## - PULLBACK: SummitCamera carries on from that pose, craning back and up along an arc until she
++##   is a tiny silhouette above the ocean of mist.
+ ## - FADE: UI/Fade goes to black over the held end frame.
+ ## - TITLE: UI/Title fades in; once it is fully shown, any key or mouse button ends the level.
+ ##
+ ## Everything is driven per frame from the phase and the seconds spent in it, every move eased
+ ## in and out, so skip_to() can put the scene at the start of any phase and nothing ever pops.
+ 
+ signal finished
+ 
+ enum Phase { IDLE, SLOWING, REVEAL, PULLBACK, FADE, TITLE }
+ 
+@@ -27,89 +30,96 @@
+ const SLOWING_SECONDS := 2.0
+ const REVEAL_SECONDS := 8.0
+ const PULLBACK_SECONDS := 12.0
+ const FADE_SECONDS := 4.0
+ const TITLE_FADE_SECONDS := 2.0
+ ## Seconds into REVEAL that the thunderclap sounds.
+ const CLAP_AT := 2.0
+ ## Seconds into REVEAL over which the wind surge rises 0 -> 1 (it then holds to the end).
+ const SURGE_SECONDS := 5.0
+ 
+-## The gameplay camera during SLOWING and REVEAL: looking along -Z (yaw 0), a little higher and
+-## further back than on the climb (14 degrees, 7 m), so it sees past the summit's rim to where
+-## the mist sea and the ridges open. The player's own pitch and distance come back on reset.
++## The gameplay camera's pose at the end of SLOWING (where SummitCamera takes over): looking
++## along -Z (yaw 0), at pitch 16 degrees and 9 m out, a little higher and further back than the
++## climb's 14 degrees and 7 m. The player's own pitch and distance come back on reset.
+ const LOOK_YAW_DEG := 0.0
+ const LOOK_PITCH_DEG := 16.0
+ const LOOK_DISTANCE := 9.0
+ ## Where she faces at the end of SLOWING: the Model's yaw toward -Z (Player: atan2(dir.x, dir.z)).
+ const FACE_YAW := PI
+ 
++## The REVEAL rise's end pose, relative to her feet: high enough behind her to see over the
++## summit's rim and plateau down onto the mist sea, close enough that she stays clear and large.
++## REVEAL_ARC_LIFT bows the path upward (a quadratic Bezier), so it rises before it closes in.
++const REVEAL_CAM_OFFSET := Vector3(0.0, 12.0, 14.0)
++const REVEAL_CAM_LOOK := Vector3(0.0, -6.0, -40.0)
++const REVEAL_ARC_LIFT := 2.0
+ ## The pull-back's end frame, relative to her feet: the camera high behind her (+Z), looking
+-## down past her across the mist sea toward the gap in the ridges (-Z). ARC_LIFT raises the
+-## path's middle (a quadratic Bezier), so the crane rises a little ahead of travelling back.
++## down past her across the mist sea toward the gap in the ridges (-Z). PULL_ARC_LIFT raises the
++## path's middle, so the crane rises a little ahead of travelling back.
+ const PULL_END_OFFSET := Vector3(0.0, 48.0, 80.0)
+ const PULL_END_LOOK := Vector3(0.0, -36.0, -300.0)
+ const PULL_ARC_LIFT := 18.0
+ ## Where skip_to() puts her when she isn't at the summit yet (where a walk-in stops).
+ const SKIP_PROGRESS := 0.975
+ 
+ ## The level root: player, cameras, vista, mood, soundscape, trail and fade come from it.
+ @export var level: HeavensCall
+-## The pull-back camera (separate from the gameplay camera).
++## The cinematic camera for REVEAL onward (separate from the gameplay camera).
+ @export var summit_camera: Camera3D
+ @export var title_label: Label
+ ## Test hook: false makes the final key only emit `finished`, without quitting.
+ @export var quit_on_finish := true
+ 
+ var phase := Phase.IDLE
+ ## True only once the title is fully shown: then any key or mouse button finishes.
+ var input_armed := false
+ ## Whether this run's thunderclap has sounded.
+ var clap_played := false
+ 
+ var _t := 0.0  # seconds into the current phase
+ var _start_speed := Vector3.ZERO  # her horizontal velocity when SLOWING began
+ var _start_face := 0.0  # her Model's yaw when SLOWING began
+ var _cam_yaw0 := 0.0  # gameplay camera orbit when SLOWING began
+ var _cam_pitch0 := 0.0
+ var _cam_dist0 := 0.0
+ var _cam_saved := false  # whether pitch0/dist0 hold the player's own orbit (to give back)
+ var _accel := -1.0  # her acceleration, saved while SLOWING drives her velocity
+-var _pull_from := Transform3D.IDENTITY
+-var _pull_look_from := Vector3.ZERO
+-var _anchor := Vector3.ZERO  # her feet when PULLBACK began
++var _rise_from := Transform3D.IDENTITY  # the gameplay camera's transform when REVEAL began
++var _rise_look_from := Vector3.ZERO  # and the point it looked at (its pivot)
++var _anchor := Vector3.ZERO  # her feet when REVEAL began
+ 
+ 
+ func _ready() -> void:
+ 	process_physics_priority = -10  # set her velocity before Player._physics_process moves her
++	process_priority = -10  # set the camera's orbit before FollowCamera._process places it
+ 	if title_label:
+ 		title_label.text = TITLE
+ 		title_label.modulate.a = 0.0
+ 
+ 
+ ## The in-out ease every transition uses (sine in-out: zero speed at both ends).
+ static func ease_in_out(t: float) -> float:
+ 	return 0.5 - 0.5 * cos(PI * clampf(t, 0.0, 1.0))
+ 
+ 
+ ## Begins the ending (once: ignored unless idle).
+ func start() -> void:
+ 	if phase != Phase.IDLE:
+ 		return
+ 	_begin_slowing()
+ 
+ 
+ ## Puts the scene at the start of phase `p`, from IDLE or any phase. From IDLE she is first put at
+-## the summit if she isn't there yet.
++## the summit if she isn't there yet. skip_to(IDLE) is the level's full reset_scene().
+ func skip_to(p: Phase) -> void:
+ 	if p == Phase.IDLE:
+-		reset()
++		level.reset_scene()
+ 		return
+ 	if phase == Phase.IDLE and level.trail.progress_at(level.player.global_position) < START_PROGRESS:
+ 		level.place_on_trail(SKIP_PROGRESS)
+ 	if phase == Phase.IDLE:
+ 		_take_control()
+ 	_restore_accel()
+ 	clap_played = false
+ 	input_armed = false
+ 	var opened := p >= Phase.PULLBACK
+ 	level.vista.reveal = 1.0 if opened else 0.0
+@@ -118,42 +128,42 @@
+ 	level.fade.color.a = 1.0 if p == Phase.TITLE else 0.0
+ 	title_label.modulate.a = 0.0
+ 	if p == Phase.SLOWING:
+ 		_begin_slowing()  # from her current motion and orbit, gameplay camera current
+ 		return
+ 	_settle_her()
+ 	level.follow_cam.yaw_deg = LOOK_YAW_DEG
+ 	level.follow_cam.pitch_deg = LOOK_PITCH_DEG
+ 	level.follow_cam.distance = LOOK_DISTANCE
+ 	level.follow_cam.snap()
+-	if p == Phase.REVEAL:
+-		level.follow_cam.make_current()
+-	else:
+-		_begin_pullback()
+-		if p != Phase.PULLBACK:
+-			_place_pull(1.0)
++	_begin_summit_camera()
++	if p == Phase.PULLBACK:
++		_place_pull(0.0)
++	elif p > Phase.PULLBACK:
++		_place_pull(1.0)
+ 	phase = p
+ 	_t = 0.0
+ 
+ 
+ ## Back to IDLE: gameplay camera, control and orbit given back, surge off, title hidden. (The
+-## level's reset_scene also closes the vista and restarts the fade-in.)
++## level's reset_scene calls this and also closes the vista and restarts the fade-in.)
+ func reset() -> void:
+ 	phase = Phase.IDLE
+ 	_t = 0.0
+ 	input_armed = false
+ 	clap_played = false
+ 	_restore_accel()
+ 	if level == null:
+ 		return
+ 	level.player.input_enabled = true
+ 	level.follow_cam.input_enabled = true
++	level.follow_cam.orbit_locked = false
+ 	if _cam_saved:
+ 		level.follow_cam.pitch_deg = _cam_pitch0
+ 		level.follow_cam.distance = _cam_dist0
+ 		_cam_saved = false
+ 	level.follow_cam.make_current()
+ 	level.mood.wind_surge = 0.0
+ 	if title_label:
+ 		title_label.modulate.a = 0.0
+ 
+ 
+@@ -189,34 +199,37 @@
+ 	match phase:
+ 		Phase.SLOWING:
+ 			var e := ease_in_out(_t / SLOWING_SECONDS)
+ 			var model: Node3D = level.player.get_node("Model")
+ 			model.rotation.y = lerp_angle(_start_face, FACE_YAW, e)
+ 			level.follow_cam.yaw_deg = rad_to_deg(lerp_angle(deg_to_rad(_cam_yaw0), deg_to_rad(LOOK_YAW_DEG), e))
+ 			level.follow_cam.pitch_deg = lerpf(_cam_pitch0, LOOK_PITCH_DEG, e)
+ 			level.follow_cam.distance = lerpf(_cam_dist0, LOOK_DISTANCE, e)
+ 			if _t >= SLOWING_SECONDS:
+ 				_settle_her()
++				level.follow_cam.yaw_deg = LOOK_YAW_DEG
++				level.follow_cam.pitch_deg = LOOK_PITCH_DEG
++				level.follow_cam.distance = LOOK_DISTANCE
++				level.follow_cam.snap()  # the exact look pose SummitCamera starts from
++				_begin_summit_camera()
+ 				_next(Phase.REVEAL)
+ 		Phase.REVEAL:
+-			level.follow_cam.yaw_deg = LOOK_YAW_DEG  # held: a stray drag can't swing it away
+-			level.follow_cam.pitch_deg = LOOK_PITCH_DEG
+-			level.follow_cam.distance = LOOK_DISTANCE
++			_place_rise(ease_in_out(_t / REVEAL_SECONDS))
+ 			level.vista.reveal = ease_in_out(_t / REVEAL_SECONDS)
+ 			level.mood.wind_surge = ease_in_out(_t / SURGE_SECONDS)
+ 			if not clap_played and _t >= CLAP_AT:
+ 				clap_played = true
+ 				level.soundscape.play_thunder(true)
+ 			if _t >= REVEAL_SECONDS:
+ 				level.vista.reveal = 1.0
+ 				level.mood.wind_surge = 1.0
+-				_begin_pullback()
++				_place_pull(0.0)
+ 				_next(Phase.PULLBACK)
+ 		Phase.PULLBACK:
+ 			_place_pull(ease_in_out(_t / PULLBACK_SECONDS))
+ 			if _t >= PULLBACK_SECONDS:
+ 				_place_pull(1.0)
+ 				_next(Phase.FADE)
+ 		Phase.FADE:
+ 			level.fade.color.a = ease_in_out(_t / FADE_SECONDS)
+ 			if _t >= FADE_SECONDS:
+ 				level.fade.color.a = 1.0
+@@ -229,20 +242,21 @@
+ 
+ 
+ func _next(p: Phase) -> void:
+ 	phase = p
+ 	_t = 0.0
+ 
+ 
+ func _take_control() -> void:
+ 	level.player.input_enabled = false
+ 	level.follow_cam.input_enabled = false
++	level.follow_cam.orbit_locked = true
+ 	if not _cam_saved:
+ 		_cam_pitch0 = level.follow_cam.pitch_deg
+ 		_cam_dist0 = level.follow_cam.distance
+ 		_cam_saved = true
+ 	_cam_yaw0 = level.follow_cam.yaw_deg
+ 
+ 
+ func _begin_slowing() -> void:
+ 	_take_control()
+ 	var v: Vector3 = level.player.velocity
+@@ -265,32 +279,41 @@
+ 	level.player.get_node("Model").rotation.y = FACE_YAW
+ 
+ 
+ func _restore_accel() -> void:
+ 	if _accel >= 0.0 and level:
+ 		level.player.acceleration = _accel
+ 	_accel = -1.0
+ 
+ 
+ ## SummitCamera takes over from the gameplay camera's transform, looking at its pivot.
+-func _begin_pullback() -> void:
++func _begin_summit_camera() -> void:
+ 	var cam: FollowCamera = level.follow_cam
+ 	_anchor = level.player.global_position
+-	_pull_from = cam.global_transform
+-	_pull_look_from = _anchor + Vector3.UP * cam.height
++	_rise_from = cam.global_transform
++	_rise_look_from = _anchor + Vector3.UP * cam.height
+ 	summit_camera.fov = cam.fov
+-	summit_camera.global_transform = _pull_from
++	summit_camera.global_transform = _rise_from
+ 	summit_camera.make_current()
+ 
+ 
+-## The pull-back at eased fraction `e`: position along the arc, aim from her to the end look.
+-func _place_pull(e: float) -> void:
+-	var p0 := _pull_from.origin
+-	var p2 := _anchor + PULL_END_OFFSET
+-	var p1 := (p0 + p2) * 0.5 + Vector3.UP * PULL_ARC_LIFT
+-	var pos := p0.lerp(p1, e).lerp(p1.lerp(p2, e), e)
+-	var look := _pull_look_from.lerp(_anchor + PULL_END_LOOK, e)
+-	summit_camera.global_position = pos
++## The REVEAL rise at eased fraction `e`: from the gameplay camera's pose up over the rim.
++func _place_rise(e: float) -> void:
+ 	if e <= 0.0:
+-		summit_camera.global_transform = _pull_from
+-	else:
+-		summit_camera.look_at(look, Vector3.UP)
++		summit_camera.global_transform = _rise_from
++		return
++	_place_move(_rise_from.origin, _rise_look_from, _anchor + REVEAL_CAM_OFFSET,
++			_anchor + REVEAL_CAM_LOOK, REVEAL_ARC_LIFT, e)
++
++
++## The pull-back at eased fraction `e`: from the rise's end pose out to the end frame.
++func _place_pull(e: float) -> void:
++	_place_move(_anchor + REVEAL_CAM_OFFSET, _anchor + REVEAL_CAM_LOOK, _anchor + PULL_END_OFFSET,
++			_anchor + PULL_END_LOOK, PULL_ARC_LIFT, e)
++
++
++## SummitCamera at `e` along a quadratic Bezier from `p0` to `p2` (its middle raised by `lift`),
++## aimed at a point sliding from `look0` to `look2`.
++func _place_move(p0: Vector3, look0: Vector3, p2: Vector3, look2: Vector3, lift: float, e: float) -> void:
++	var p1 := (p0 + p2) * 0.5 + Vector3.UP * lift
++	summit_camera.global_position = p0.lerp(p1, e).lerp(p1.lerp(p2, e), e)
++	summit_camera.look_at(look0.lerp(look2, e), Vector3.UP)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_summit.gd tests/test_heavens_summit.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_summit.gd	2026-11-08 17:59:49.718056200 +0800
++++ tests/test_heavens_summit.gd	2026-11-08 18:05:35.496345100 +0800
+@@ -1,38 +1,59 @@
+ extends "res://tests/case.gd"
+ ## Heavens call summit sequence (Task 7): she slows to a stop at the summit, the fog parts, the
+ ## wind surges and the clap sounds, a separate camera pulls back until she is tiny, the screen
+ ## fades to black and the title shows; only then does a key quit.
+ 
+ const SCENE := "res://scenes/levels/heavens_call.tscn"
+ 
++var _on_finished := Callable()
++var _saved_mask := -1
++
++
++## Every test here runs with the quit hook off, so a stray real key on the title can't quit the
++## runner; it is restored, and the finished handler disconnected, afterwards.
++func before_each(lv) -> void:
++	lv.summit.quit_on_finish = false
++
++
++func after_each(lv) -> void:
++	lv.summit.quit_on_finish = true
++	if _on_finished.is_valid() and lv.summit.finished.is_connected(_on_finished):
++		lv.summit.finished.disconnect(_on_finished)
++	lv.summit.set_process(true)
++	lv.summit.set_physics_process(true)
++	if _saved_mask >= 0:
++		lv.follow_cam.collision_mask = _saved_mask
++		_saved_mask = -1
++
+ 
+ func test_reaching_summit_starts_sequence(lv) -> void:
+ 	lv.player.global_position = lv.trail.point_at(0.985)
+ 	await frames(3)
+ 	check(lv.summit.phase != SummitSequence.Phase.IDLE, "sequence started at the summit")
+ 	check(not lv.player.input_enabled, "player control taken away")
+ 
+ 
+ func test_title_text(lv) -> void:
+ 	lv.summit.skip_to(SummitSequence.Phase.TITLE)
+ 	await seconds(2.2)
+ 	var title: Label = lv.get_node("UI/Title")
+ 	check_eq(title.text, "Heavens call", "exact title")
+ 	check(title.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "centred")
+ 	check(lv.get_node("UI/Fade").color.a > 0.99, "behind the title is black")
+ 
+ 
+ func test_input_ignored_until_title(lv) -> void:
+ 	var quit := [false]
+-	lv.summit.finished.connect(func() -> void: quit[0] = true)
+-	lv.summit.quit_on_finish = false  # test hook: don't actually quit the runner
++	_on_finished = func() -> void: quit[0] = true
++	lv.summit.finished.connect(_on_finished)
++	lv.summit.quit_on_finish = false  # test hook (also set in before_each)
+ 	lv.summit.skip_to(SummitSequence.Phase.REVEAL)
+ 	var key := InputEventKey.new()
+ 	key.keycode = KEY_SPACE
+ 	key.pressed = true
+ 	Input.parse_input_event(key)
+ 	await frames(2)
+ 	check(not quit[0], "keys during the reveal do nothing")
+ 	lv.summit.skip_to(SummitSequence.Phase.TITLE)
+ 	await seconds(2.2)
+ 	Input.parse_input_event(key)
+@@ -131,22 +152,137 @@
+ 	check_eq(lv.vista.far_fade(), 1.0, "fully in by half the reveal")
+ 	lv.vista.reveal = 0.0
+ 
+ 
+ ## skip_to() lands on a phase's start state from any other phase, backwards included.
+ func test_skip_to_from_any_phase(lv) -> void:
+ 	lv.summit.skip_to(SummitSequence.Phase.TITLE)
+ 	await frames(2)
+ 	lv.summit.skip_to(SummitSequence.Phase.REVEAL)
+ 	await frames(2)
+-	check(lv.get_viewport().get_camera_3d() == lv.follow_cam, "REVEAL: gameplay camera")
++	check(lv.get_viewport().get_camera_3d() == lv.summit.summit_camera, "REVEAL: summit camera")
+ 	check(lv.get_node("UI/Fade").color.a < 0.01, "REVEAL: no black")
+ 	check(lv.vista.reveal < 0.02, "REVEAL: closed")
+ 	lv.summit.skip_to(SummitSequence.Phase.FADE)
+ 	await frames(2)
+ 	check(lv.get_viewport().get_camera_3d() == lv.summit.summit_camera, "FADE: summit camera")
+ 	lv.summit.skip_to(SummitSequence.Phase.SLOWING)
+ 	await frames(2)
+ 	check_eq(lv.summit.phase, SummitSequence.Phase.SLOWING, "back to SLOWING")
+ 	check(lv.get_viewport().get_camera_3d() == lv.follow_cam, "SLOWING: gameplay camera")
+ 	check_eq(lv.vista.reveal, 0.0, "SLOWING: closed")
+ 	check(not lv.player.input_enabled, "SLOWING: no control")
++
++
++## skip_to(IDLE) is a full reset: the vista closed, fading in from black, and the sequence not
++## restarted by her still standing at the summit.
++func test_skip_to_idle_is_a_reset(lv) -> void:
++	lv.summit.skip_to(SummitSequence.Phase.TITLE)
++	await frames(2)
++	lv.summit.skip_to(SummitSequence.Phase.IDLE)
++	await physics_frames(3)
++	check_eq(lv.summit.phase, SummitSequence.Phase.IDLE, "idle and staying idle")
++	check_eq(lv.vista.reveal, 0.0, "vista closed")
++	check(lv.furthest_progress < 0.1, "back at the foot")
++	check(lv.get_node("UI/Fade").color.a > 0.5, "fading in from black")
++
++
++## Review Focus 4: a right-drag orbit or a wheel zoom during the sequence never moves the camera
++## off the sequence's own pose (the sequence is frozen so its pose holds still to compare).
++func test_camera_ignores_mouse_during_sequence(lv) -> void:
++	lv.summit.skip_to(SummitSequence.Phase.SLOWING)
++	await seconds(1.0)
++	_freeze(lv)
++	# Collision off for the comparison: its slow ease-out after a hit would move the camera on its
++	# own. Mouse orbit and zoom are what is under test.
++	_saved_mask = lv.follow_cam.collision_mask
++	lv.follow_cam.collision_mask = 0
++	await _settle_camera(lv)
++	await frames(10)
++	check(lv.get_viewport().get_camera_3d() == lv.follow_cam, "SLOWING: gameplay camera")
++	var before: Transform3D = lv.get_viewport().get_camera_3d().global_transform
++	await _drag_and_wheel()
++	var after: Transform3D = lv.get_viewport().get_camera_3d().global_transform
++	check(before.is_equal_approx(after), "SLOWING: camera unmoved by drag and wheel (moved %.4f m, orbit %.2f/%.2f/%.2f)" % [before.origin.distance_to(after.origin), lv.follow_cam.yaw_deg, lv.follow_cam.pitch_deg, lv.follow_cam.distance])
++	lv.summit.set_process(true)
++	lv.summit.set_physics_process(true)
++	lv.summit.skip_to(SummitSequence.Phase.REVEAL)
++	await seconds(0.5)
++	_freeze(lv)
++	await frames(2)
++	before = lv.get_viewport().get_camera_3d().global_transform
++	var orbit := Vector3(lv.follow_cam.yaw_deg, lv.follow_cam.pitch_deg, lv.follow_cam.distance)
++	await _drag_and_wheel()
++	after = lv.get_viewport().get_camera_3d().global_transform
++	check(before.is_equal_approx(after), "REVEAL: camera unmoved by drag and wheel")
++	var orbit_after := Vector3(lv.follow_cam.yaw_deg, lv.follow_cam.pitch_deg, lv.follow_cam.distance)
++	check(orbit.is_equal_approx(orbit_after), "REVEAL: the gameplay orbit untouched too")
++
++
++## Ruling 12: the reveal is watched as it happens. The cinematic camera rises over the rim
++## (it looks down onto the plateau and past it) with her still clear and fairly large.
++func test_reveal_rises_over_the_rim(lv) -> void:
++	lv.summit.skip_to(SummitSequence.Phase.PULLBACK)  # PULLBACK starts at the rise's end pose
++	lv.summit.set_process(false)
++	await frames(2)
++	var cam: Camera3D = lv.get_viewport().get_camera_3d()
++	var feet: Vector3 = lv.player.global_position
++	check(cam.global_position.y - feet.y >= 10.0, "risen at least 10 m above her")
++	var top: Vector2 = cam.unproject_position(feet + Vector3.UP * 1.7)
++	var foot: Vector2 = cam.unproject_position(feet)
++	var size: Vector2 = lv.get_viewport().get_visible_rect().size
++	check(absf(foot.y - top.y) > size.y * 0.05, "she is still fairly large (%.1f%%)" % (100.0 * absf(foot.y - top.y) / size.y))
++	check(Rect2(Vector2.ZERO, size).grow(-size.y * 0.05).has_point(foot), "she is in frame")
++
++
++## reset_scene() cuts off a clap or footstep still sounding.
++func test_reset_stops_one_shots(lv) -> void:
++	var thunder: AudioStreamPlayer = lv.soundscape.get_node("Thunder")
++	thunder.stream = AudioStreamGenerator.new()
++	thunder.play()
++	await frames(1)
++	lv.reset_scene()
++	check(not lv.soundscape.thunder_playing(), "thunder stopped on reset")
++	thunder.stream = null
++
++
++func _freeze(lv) -> void:
++	lv.summit.set_process(false)
++	lv.summit.set_physics_process(false)
++
++
++func _drag_and_wheel() -> void:
++	var press := InputEventMouseButton.new()
++	press.button_index = MOUSE_BUTTON_RIGHT
++	press.button_mask = MOUSE_BUTTON_MASK_RIGHT
++	press.pressed = true
++	Input.parse_input_event(press)
++	await frames(1)
++	for i in 3:
++		var drag := InputEventMouseMotion.new()
++		drag.button_mask = MOUSE_BUTTON_MASK_RIGHT
++		drag.relative = Vector2(60.0, 25.0)
++		Input.parse_input_event(drag)
++		await frames(1)
++	var wheel := InputEventMouseButton.new()
++	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
++	wheel.pressed = true
++	Input.parse_input_event(wheel)
++	await frames(1)
++	var release := InputEventMouseButton.new()
++	release.button_index = MOUSE_BUTTON_RIGHT
++	release.pressed = false
++	Input.parse_input_event(release)
++	await frames(3)
++
++
++## Waits (up to 3 s) until the current camera has held still for 5 frames in a row.
++func _settle_camera(lv) -> void:
++	var last: Vector3 = lv.get_viewport().get_camera_3d().global_position
++	var still := 0
++	for i in 180:
++		await frames(1)
++		var now: Vector3 = lv.get_viewport().get_camera_3d().global_position
++		still = still + 1 if now.distance_to(last) < 0.00001 else 0
++		if still >= 5:
++			return
++		last = now
+# new/changed binary or audio files:

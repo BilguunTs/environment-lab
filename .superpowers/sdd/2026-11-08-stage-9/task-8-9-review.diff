@@ -1,0 +1,621 @@
+# Task 8-9 review package (diff -ruN --strip-trailing-cr, pre-task snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/compare.gd scripts/compare.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/compare.gd	2026-11-08 11:56:26.094847600 +0800
++++ scripts/compare.gd	2026-11-08 11:59:28.285917700 +0800
+@@ -189,26 +189,27 @@
+ 	return image
+ 
+ 
+ ## Re-renders the frozen A image for split view. Costs a SETTLE_FRAMES blink.
+ func capture_a() -> void:
+ 	if busy or not has_a():
+ 		return
+ 	busy = true
+ 	_dirty = false  # anything that re-dirties during the capture triggers another one
+ 	var b := compare_state()
+-	a_image = await render_state(_a_here())
+-	_apply(b)
++	# Sampled before the blink: a move during it must still differ afterwards and recapture.
+ 	var cam := get_viewport().get_camera_3d()
+ 	if cam:
+ 		_last_cam = cam.global_transform
+ 		_last_fov = cam.fov
++	a_image = await render_state(_a_here())
++	_apply(b)
+ 	_end_busy()
+ 	changed.emit()
+ 
+ 
+ func _end_busy() -> void:
+ 	busy = false
+ 	if _release_pending:
+ 		_release_pending = false
+ 		show_a(false)
+ 
+@@ -250,27 +251,37 @@
+ 	var b := compare_state()
+ 	var a := _a_here()
+ 	var lines := diff_between(a, b)
+ 	var image_a := await render_state(a)
+ 	var image_b := await render_state(b)
+ 	_end_busy()
+ 	var view_name: String = pg.get_param("view")
+ 	var header := "%s · %s · A (left) vs B (right)" % [Time.get_datetime_string_from_system(false, true), view_name]
+ 	var sheet := await compose(image_a, image_b, header, lines)
+ 	var path: String = pg.screenshot_path("compare_" + view_name)
+-	sheet.save_png(path)
++	var error := save_sheet(sheet, path)
++	if error != "":
++		pg.panel.notify(error)
++		changed.emit()
++		return ""
+ 	DisplayServer.clipboard_set(log_row(lines))
+ 	pg.panel.notify("Saved %s (log row copied)" % path.get_file())
+ 	changed.emit()
+ 	return path
+ 
+ 
++## Saves the sheet as PNG. Returns "" on success, otherwise a message for the status line.
++static func save_sheet(image: Image, path: String) -> String:
++	var err := image.save_png(path)
++	return "" if err == OK else "Could not save %s (error %d)" % [path.get_file(), err]
++
++
+ ## An EXPERIMENT_LOG.md row with Date and Changed filled in; Question, Fixed and Result are yours.
+ static func log_row(lines: Array[String]) -> String:
+ 	var changed_text := ", ".join(PackedStringArray(lines)) if not lines.is_empty() else "(nothing)"
+ 	return "| %s | | %s | | |" % [Time.get_date_string_from_system(), changed_text]
+ 
+ 
+ ## Two frames side by side with a text strip below. Godot's Image can't draw text, so this lays
+ ## the pieces out in a temporary 2D SubViewport and grabs its frame.
+ func compose(left: Image, right: Image, header: String, lines: Array[String]) -> Image:
+ 	var w := left.get_width()
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/light_gizmos.gd scripts/debug/light_gizmos.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/light_gizmos.gd	2026-11-08 11:56:26.098394300 +0800
++++ scripts/debug/light_gizmos.gd	2026-11-08 11:59:28.338042100 +0800
+@@ -54,29 +54,42 @@
+ func _ready() -> void:
+ 	mesh = _mesh
+ 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+ 	var material := StandardMaterial3D.new()
+ 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+ 	material.vertex_color_use_as_albedo = true
+ 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA  # drawn after opaque geometry
+ 	material.no_depth_test = true
+ 	material_override = material
+ 	visible = false
++	add_to_group("overlay")  # captures hide it
+ 	visibility_changed.connect(_on_visibility_changed)
++	get_tree().node_added.connect(_on_node_added)
++	get_tree().node_removed.connect(_on_node_removed)
+ 
+ 
+ func _on_visibility_changed() -> void:
+ 	if visible:
+ 		_lights.assign(pg.find_children("*", "Light3D", true, false))
+ 	_rebuild()
+ 
+ 
++func _on_node_added(node: Node) -> void:
++	if visible and node is Light3D and pg.is_ancestor_of(node) and not _lights.has(node):
++		_lights.append(node)
++
++
++func _on_node_removed(node: Node) -> void:
++	if node is Light3D:
++		_lights.erase(node)
++
++
+ func _process(_delta: float) -> void:
+ 	if visible:
+ 		_rebuild()
+ 
+ 
+ func _rebuild() -> void:
+ 	_mesh.clear_surfaces()
+ 	if not visible:
+ 		return
+ 	var points := PackedVector3Array()
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/perf_hud.gd scripts/debug/perf_hud.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/perf_hud.gd	2026-11-08 11:56:26.098394300 +0800
++++ scripts/debug/perf_hud.gd	2026-11-08 12:00:45.902617400 +0800
+@@ -39,21 +39,21 @@
+ 	return str(n)
+ 
+ 
+ func _ready() -> void:
+ 	add_to_group("overlay")
+ 	mouse_filter = MOUSE_FILTER_IGNORE
+ 	set_anchors_and_offsets_preset(PRESET_TOP_RIGHT)
+ 	grow_horizontal = GROW_DIRECTION_BEGIN
+ 	offset_left = -440
+ 	offset_right = -16
+-	offset_top = 64  # under the two-line view HUD
++	offset_top = 64  # until the first update places it under the view HUD
+ 	horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+ 	add_theme_font_size_override("font_size", 12)
+ 	add_theme_color_override("font_color", Color(0.75, 1.0, 0.75, 0.9))
+ 	add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+ 	add_theme_constant_override("outline_size", 4)
+ 	visible = false
+ 	visibility_changed.connect(_on_visibility_changed)
+ 
+ 
+ func _on_visibility_changed() -> void:
+@@ -64,20 +64,23 @@
+ func _reset() -> void:
+ 	_timer = 0.0
+ 	_frames = 0
+ 	_cpu = 0.0
+ 	_gpu = 0.0
+ 
+ 
+ func _process(delta: float) -> void:
+ 	if not visible:
+ 		return
++	var view_hud: Control = pg._hud
++	if view_hud:  # the view HUD's height changes with its intent text and the window width
++		offset_top = view_hud.position.y + maxf(view_hud.size.y, view_hud.get_combined_minimum_size().y) + 8.0
+ 	var rid := get_viewport().get_viewport_rid()
+ 	# Work only: TIME_PROCESS would be the whole frame, vsync wait included.
+ 	_cpu += RenderingServer.viewport_get_measured_render_time_cpu(rid) + RenderingServer.get_frame_setup_time_cpu()
+ 	_gpu += RenderingServer.viewport_get_measured_render_time_gpu(rid)
+ 	_frames += 1
+ 	_timer += delta
+ 	if _timer < INTERVAL:
+ 		return
+ 	text = format(Performance.get_monitor(Performance.TIME_FPS), _cpu / _frames, _gpu / _frames,
+ 		int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/value_probe.gd scripts/debug/value_probe.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/value_probe.gd	2026-11-08 11:56:26.098394300 +0800
++++ scripts/debug/value_probe.gd	2026-11-08 12:00:33.963875400 +0800
+@@ -15,41 +15,67 @@
+ var cursor_value := -1.0  # -1 = cursor outside the window
+ var stats := {}
+ var _timer := 0.0
+ 
+ 
+ static func luminance(c: Color) -> float:
+ 	return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+ 
+ 
+ ## Percentiles and histogram of `image`, skipping pixels inside `exclude` (image pixel space).
++## Reads the raw bytes and walks each row as runs between the excluded x-spans.
+ static func measure(image: Image, exclude: Array[Rect2] = []) -> Dictionary:
+ 	var hist := PackedInt32Array()
+ 	hist.resize(BINS)
++	var source := image
++	if source.get_format() != Image.FORMAT_RGB8 and source.get_format() != Image.FORMAT_RGBA8:
++		source = image.duplicate()
++		source.convert(Image.FORMAT_RGBA8)
++	var width := source.get_width()
++	var height := source.get_height()
++	var bpp := 3 if source.get_format() == Image.FORMAT_RGB8 else 4
++	var data := source.get_data()
++	var lr := PackedFloat64Array()
++	var lg := PackedFloat64Array()
++	var lb := PackedFloat64Array()
++	for i in 256:
++		lr.append(0.2126 * i / 255.0)
++		lg.append(0.7152 * i / 255.0)
++		lb.append(0.0722 * i / 255.0)
+ 	var values := PackedFloat32Array()
+-	for y in image.get_height():
+-		for x in image.get_width():
+-			var p := Vector2(x + 0.5, y + 0.5)
+-			var skip := false
+-			for r in exclude:
+-				if r.has_point(p):
+-					skip = true
+-					break
+-			if skip:
+-				continue
+-			var v := clampf(luminance(image.get_pixel(x, y)), 0.0, 1.0)
+-			values.append(v)
+-			hist[mini(int(v * BINS), BINS - 1)] += 1
+-	if values.is_empty():
++	values.resize(width * height)
++	var count := 0
++	for y in height:
++		# Pixel centres inside a rect, as Rect2.has_point(Vector2(x + 0.5, y + 0.5)) would say.
++		var spans: Array[Vector2i] = []
++		for r in exclude:
++			if y + 0.5 >= r.position.y and y + 0.5 < r.end.y:
++				var x0 := clampi(ceili(r.position.x - 0.5), 0, width)
++				var x1 := clampi(ceili(r.end.x - 0.5), 0, width)
++				if x1 > x0:
++					spans.append(Vector2i(x0, x1))
++		spans.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.x < b.x)
++		spans.append(Vector2i(width, width))  # sentinel: the run after the last span
++		var cursor := 0
++		for span in spans:
++			for x in range(cursor, span.x):
++				var i := (y * width + x) * bpp
++				var v := minf(lr[data[i]] + lg[data[i + 1]] + lb[data[i + 2]], 1.0)
++				values[count] = v
++				count += 1
++				hist[mini(int(v * BINS), BINS - 1)] += 1
++			cursor = maxi(cursor, span.y)
++	if count == 0:
+ 		return {"p5": 0.0, "p50": 0.0, "p95": 0.0, "hist": hist}
++	values.resize(count)
+ 	values.sort()
+-	var n := values.size()
++	var n := count
+ 	return {
+ 		"p5": values[mini(int(0.05 * n), n - 1)],
+ 		"p50": values[mini(int(0.5 * n), n - 1)],
+ 		"p95": values[mini(int(0.95 * n), n - 1)],
+ 		"hist": hist,
+ 	}
+ 
+ 
+ func _ready() -> void:
+ 	add_to_group("overlay")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/playground.gd scripts/playground.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/playground.gd	2026-11-08 11:56:26.098394300 +0800
++++ scripts/playground.gd	2026-11-08 12:00:45.827474300 +0800
+@@ -335,41 +335,59 @@
+ 		compare.request_recapture()  # the value view is baked into the frozen A image
+ 
+ 
+ func get_state() -> Dictionary:
+ 	var state := {}
+ 	for key in PARAM_ORDER:
+ 		state[key] = get_param(key)
+ 	return state
+ 
+ 
+-func apply_state(state: Dictionary) -> void:
++## Applies the keys of `state`, skipping a value whose type differs from the default's (int and
++## float count as one). Returns the skip notes, which are also shown in the panel's status line.
++func apply_state(state: Dictionary) -> Array[String]:
++	var skipped: Array[String] = []
+ 	for key in PARAM_ORDER:
+-		if state.has(key):
+-			set_param(key, state[key])
++		if not state.has(key):
++			continue
++		if _default_state.has(key) and not _same_type(state[key], _default_state[key]):
++			skipped.append("Skipped %s: expected %s" % [key, type_string(typeof(_default_state[key]))])
++			continue
++		set_param(key, state[key])
+ 	panel.sync()
++	if not skipped.is_empty():
++		panel.notify("; ".join(PackedStringArray(skipped)))
++	return skipped
++
++
++static func _same_type(a: Variant, b: Variant) -> bool:
++	var numeric := [TYPE_INT, TYPE_FLOAT]
++	return typeof(a) == typeof(b) or (typeof(a) in numeric and typeof(b) in numeric)
+ 
+ 
+ ## Presets are layered on top of the default state, so they are always reproducible.
+ func apply_preset(preset_name: String) -> void:
+ 	var presets := Presets.all(preset_path)
+ 	if not presets.has(preset_name):
+ 		panel.notify("No preset named %s" % preset_name)
+ 		return
+ 	_restore_fovs()
+ 	var preset: Dictionary = presets[preset_name]
+ 	var state := _default_state.duplicate()
+ 	if preset.has("view") and not preset.has("cam_fov"):
+ 		state.erase("cam_fov")  # keep the viewpoint's authored lens, not the gameplay FOV
+ 	state.merge(preset, true)
+-	apply_state(state)
+-	panel.notify("Preset: %s" % preset_name)
++	var skipped := apply_state(state)
++	var note := "Preset: %s" % preset_name
++	if not skipped.is_empty():
++		note += " (%s)" % "; ".join(PackedStringArray(skipped))
++	panel.notify(note)
+ 
+ 
+ ## Saves the current state as a user preset (overrides on top of the default). True on success.
+ func save_preset(preset_name: String) -> bool:
+ 	var error := Presets.save_user(preset_name, get_state(), _default_state, preset_path)
+ 	if error != "":
+ 		panel.notify(error)
+ 		return false
+ 	panel.refresh_presets()
+ 	panel.notify("Saved preset: %s" % preset_name.strip_edges())
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/presets.gd scripts/presets.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/presets.gd	2026-11-08 11:56:26.092275400 +0800
++++ scripts/presets.gd	2026-11-08 12:00:45.553577600 +0800
+@@ -138,20 +138,29 @@
+ 	for section in cfg.get_sections():
+ 		if result.has(section):
+ 			continue
+ 		var preset := {}
+ 		for key in cfg.get_section_keys(section):
+ 			preset[key] = cfg.get_value(section, key)
+ 		result[section] = preset
+ 	return result
+ 
+ 
++## "" when the saved presets file reads fine or doesn't exist yet, otherwise a message for the
++## panel's status line (all() silently shows only the built-ins in that case).
++static func load_error(path := USER_PATH) -> String:
++	var err := ConfigFile.new().load(path)
++	if err == OK or err == ERR_FILE_NOT_FOUND:
++		return ""
++	return "Can't read %s (error %d): fix or delete it" % [path, err]
++
++
+ ## The keys of `state` whose values differ from `base`, with the values from `state`.
+ static func overrides(state: Dictionary, base: Dictionary) -> Dictionary:
+ 	var result := {}
+ 	for key in state:
+ 		if not base.has(key) or not same_value(state[key], base[key]):
+ 			result[key] = state[key]
+ 	return result
+ 
+ 
+ static func same_value(a: Variant, b: Variant) -> bool:
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/ui/dev_panel.gd scripts/ui/dev_panel.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/ui/dev_panel.gd	2026-11-08 11:56:26.081802600 +0800
++++ scripts/ui/dev_panel.gd	2026-11-08 12:00:45.691315500 +0800
+@@ -168,20 +168,24 @@
+ 		elif c is HSlider:
+ 			c.set_value_no_signal(value)
+ 			_value_labels[key].text = _label_for(key, value, c.step)
+ 
+ 
+ func notify(text: String) -> void:
+ 	if _status:
+ 		_status.text = text
+ 
+ 
++func status_text() -> String:
++	return _status.text if _status else ""
++
++
+ ## Lists what differs between A and B (the experiment log's "Changed" column).
+ func update_compare() -> void:
+ 	if _diff_label == null:
+ 		return
+ 	var c: Compare = _pg.compare
+ 	if not c.has_a():
+ 		_diff_label.text = "Nothing pinned."
+ 		return
+ 	var lines := c.diff()
+ 	if lines.is_empty():
+@@ -332,20 +336,23 @@
+ 
+ 
+ ## Rebuilds the preset buttons, e.g. after a save adds one.
+ func refresh_presets() -> void:
+ 	for child in _preset_grid.get_children():
+ 		_preset_grid.remove_child(child)
+ 		child.queue_free()
+ 	for preset_name in Presets.all(_pg.preset_path):
+ 		_preset_grid.add_child(_button(preset_name, _pg.apply_preset.bind(preset_name)))
+ 	_preset_grid.add_child(_button("Reset", _pg.reset_scene))
++	var problem := Presets.load_error(_pg.preset_path)
++	if problem != "":
++		notify(problem)
+ 
+ 
+ func preset_buttons() -> PackedStringArray:
+ 	var names := PackedStringArray()
+ 	for child in _preset_grid.get_children():
+ 		names.append(child.text)
+ 	return names
+ 
+ 
+ func _save_preset() -> void:
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_compare_pair.gd tests/test_compare_pair.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_compare_pair.gd	2026-11-08 11:56:26.129320600 +0800
++++ tests/test_compare_pair.gd	2026-11-08 11:59:33.203799300 +0800
+@@ -1,17 +1,25 @@
+ extends "res://tests/case.gd"
+ 
+ 
++var _clipboard := ""
++
++
+ func before_each(pg) -> void:
++	_clipboard = DisplayServer.clipboard_get()
+ 	pg.compare.clear()
+ 
+ 
++func after_each(_pg) -> void:
++	DisplayServer.clipboard_set(_clipboard)
++
++
+ func test_log_row_format(_pg) -> void:
+ 	var lines: Array[String] = ["a: 1 → 2", "b: on → off"]
+ 	var row := Compare.log_row(lines)
+ 	check(row.begins_with("| 20"), "starts with the date")
+ 	check(row.ends_with("| | a: 1 → 2, b: on → off | | |"), "only the Changed column is filled")
+ 
+ 
+ func test_save_pair_without_a_does_nothing(pg) -> void:
+ 	var path: String = await pg.compare.save_pair()
+ 	check_eq(path, "", "no file without A")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_stage8_leftovers.gd tests/test_stage8_leftovers.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_stage8_leftovers.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_stage8_leftovers.gd	2026-11-08 12:00:51.786804800 +0800
+@@ -0,0 +1,136 @@
++extends "res://tests/case.gd"
++## Regression tests for the minors deferred from the Stage 8 review.
++
++
++func before_each(pg) -> void:
++	pg.compare.clear()
++	if pg.compare.split:
++		await pg.compare.toggle_split()
++
++
++func after_each(pg) -> void:
++	if pg.compare.split:
++		await pg.compare.toggle_split()
++	pg.compare.clear()
++	pg.set_param("light_gizmos", false)
++
++
++func _vertex_count(mesh: Mesh) -> int:
++	if mesh.get_surface_count() == 0:
++		return 0
++	var arrays := mesh.surface_get_arrays(0)
++	return (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
++
++
++# Minor 1: the camera is sampled before the blink, so a move during it is noticed afterwards.
++func test_player_move_during_capture_recaptures(pg) -> void:
++	if not needs_window():
++		return
++	pg.compare.pin()
++	await pg.compare.toggle_split()
++	await seconds(Compare.RECAPTURE_DELAY + 0.3)  # settle: nothing pending
++	var start: Vector3 = pg.player.global_position
++	var captures := [0]
++	var counter := func() -> void: captures[0] += 1
++	pg.compare.changed.connect(counter)
++	pg.compare.capture_a()  # not awaited
++	await frames(1)
++	pg.player.global_position += Vector3(2, 0, 0)
++	await frames(Compare.SETTLE_FRAMES + 5)
++	await seconds(Compare.RECAPTURE_DELAY + 0.3)
++	pg.compare.changed.disconnect(counter)
++	pg.player.global_position = start
++	check(captures[0] >= 2, "a move during the capture triggers another one (got %d)" % captures[0])
++
++
++# Minor 5: gizmos are an overlay, and follow lights that come and go.
++func test_gizmos_hidden_in_captures(pg) -> void:
++	pg.set_param("light_gizmos", true)
++	pg.hide_overlays()
++	check(not pg.light_gizmos.visible, "hidden while capturing")
++	pg.restore_overlays()
++	check(pg.light_gizmos.visible, "back after the capture")
++
++
++func test_gizmos_pick_up_new_lights(pg) -> void:
++	if not needs_window():
++		return
++	pg.set_param("light_gizmos", true)
++	await frames(2)
++	var before := _vertex_count(pg.light_gizmos.mesh)
++	var light := OmniLight3D.new()
++	pg.add_child(light)
++	await frames(2)
++	var added := _vertex_count(pg.light_gizmos.mesh)
++	light.free()
++	await frames(2)
++	var removed := _vertex_count(pg.light_gizmos.mesh)
++	check(added > before, "new light drawn (%d -> %d)" % [before, added])
++	check_eq(removed, before, "removed light no longer drawn")
++
++
++# Minor 6: a failed save is reported, not swallowed.
++func test_save_sheet_reports_failure(_pg) -> void:
++	expect_error("Can't save")
++	var result := Compare.save_sheet(Image.create(4, 4, false, Image.FORMAT_RGB8), "user://no/such/dir/x.png")
++	check(result.contains("Could not save"), "failure message, got '%s'" % result)
++
++
++# Minor 2: the perf readout sits under the view HUD, whatever its height.
++func test_perf_readout_clears_view_hud(pg) -> void:
++	var start: String = pg.get_param("view")
++	pg.set_param("perf_hud", true)
++	for view_name in pg.view_names():
++		pg.set_param("view", view_name)
++		await frames(2)
++		var hud_bottom: float = pg._hud.get_global_rect().end.y
++		var perf_top: float = pg.perf_hud.get_global_rect().position.y
++		check(perf_top >= hud_bottom, "%s: readout at %.0f, HUD ends at %.0f" % [view_name, perf_top, hud_bottom])
++	pg.set_param("perf_hud", false)
++	pg.set_param("view", start)
++
++
++# Minor 3: an unreadable user presets file is shown, not silently treated as empty.
++const BAD_PATH := "user://bad_presets.cfg"
++const TYPED_PATH := "user://test_typed_presets.cfg"
++
++
++func _remove(path: String) -> void:
++	if FileAccess.file_exists(path):
++		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
++
++
++func test_unreadable_presets_file_is_reported(pg) -> void:
++	expect_error("ConfigFile parse")
++	var f := FileAccess.open(BAD_PATH, FileAccess.WRITE)
++	f.store_string("[broken")
++	f.close()
++	var original: String = pg.preset_path
++	pg.preset_path = BAD_PATH
++	pg.panel.refresh_presets()
++	var text: String = pg.panel.status_text()
++	pg.preset_path = original
++	pg.panel.refresh_presets()
++	_remove(BAD_PATH)
++	check(text.contains("Can't read"), "status says the file can't be read, got '%s'" % text)
++
++
++# Minor 4: a hand-edited, wrong-typed value is skipped with a note.
++func test_wrong_typed_preset_value_is_skipped(pg) -> void:
++	var cfg := ConfigFile.new()
++	cfg.set_value("Bad", "wind_direction", "north")
++	cfg.set_value("Bad", "wind", 1.2)
++	cfg.save(TYPED_PATH)
++	var original: String = pg.preset_path
++	pg.preset_path = TYPED_PATH
++	pg.reset_scene()
++	pg.apply_preset("Bad")
++	var direction: float = pg.get_param("wind_direction")
++	var wind: float = pg.get_param("wind")
++	var text: String = pg.panel.status_text()
++	pg.preset_path = original
++	pg.reset_scene()
++	_remove(TYPED_PATH)
++	check_near(direction, 53.13, 0.01, "direction unchanged")
++	check_near(wind, 1.2, 0.001, "the valid value applied")
++	check(text.contains("Skipped wind_direction"), "status notes the skip, got '%s'" % text)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_value_probe.gd tests/test_value_probe.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_value_probe.gd	2026-11-08 11:56:26.129320600 +0800
++++ tests/test_value_probe.gd	2026-11-08 12:00:05.200156600 +0800
+@@ -53,10 +53,40 @@
+ func test_sample_cost(pg) -> void:
+ 	if not needs_window():
+ 		return
+ 	pg.set_param("probe", true)
+ 	await frames(3)
+ 	var start := Time.get_ticks_usec()
+ 	pg.probe.sample()
+ 	var ms := (Time.get_ticks_usec() - start) / 1000.0
+ 	print("     probe sample: %.1f ms" % ms)
+ 	check(ms < 60.0, "one probe sample stays under 60 ms (got %.1f)" % ms)
++
++
++func test_measure_known_gradient(_pg) -> void:
++	var image := Image.create_empty(100, 1, false, Image.FORMAT_RGB8)
++	for x in 100:
++		var g := x / 99.0
++		image.set_pixel(x, 0, Color(g, g, g))
++	var s := ValueProbe.measure(image)
++	check_near(s["p5"], 5 / 99.0, 0.005, "p5 is pixel 5")
++	check_near(s["p50"], 50 / 99.0, 0.005, "p50 is pixel 50")
++	check_near(s["p95"], 95 / 99.0, 0.005, "p95 is pixel 95")
++	var total := 0
++	for count in s["hist"]:
++		total += count
++	check_eq(total, 100, "every pixel is in the histogram")
++
++
++func test_measure_is_fast(_pg) -> void:
++	var image := Image.create_empty(200, 113, false, Image.FORMAT_RGBA8)
++	image.fill(Color(0.4, 0.5, 0.6))
++	var exclude: Array[Rect2] = [Rect2(0, 0, 40, 113), Rect2(150, 10, 40, 30), Rect2(60, 80, 70, 20)]
++	var start := Time.get_ticks_usec()
++	var s := ValueProbe.measure(image, exclude)
++	var ms := (Time.get_ticks_usec() - start) / 1000.0
++	print("     measure: %.2f ms" % ms)
++	check(ms < 4.0, "measure() under 4 ms (got %.2f)" % ms)
++	var total := 0
++	for count in s["hist"]:
++		total += count
++	check_eq(total, 200 * 113 - 40 * 113 - 40 * 30 - 70 * 20, "excluded pixels not counted")

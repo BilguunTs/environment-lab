@@ -1,0 +1,558 @@
+# HC Task 1 review package (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/scripts/camera/follow_camera.gd scripts/camera/follow_camera.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/scripts/camera/follow_camera.gd	2026-11-08 15:39:08.314855500 +0800
++++ scripts/camera/follow_camera.gd	2026-11-08 15:44:52.755547100 +0800
+@@ -4,21 +4,26 @@
+ ## Cinematic viewpoints are separate Camera3D nodes and never move.
+ ##
+ ## Right-mouse drag orbits, Q/E rotates, mouse wheel zooms.
+ 
+ signal user_adjusted  # emitted when the player orbits/zooms, so UI can resync
+ 
+ @export var target: Node3D
+ @export_range(0.0, 10.0, 0.1) var height := 1.4
+ @export_range(1.0, 40.0, 0.5) var distance := 7.0
+ ## Angle above the horizon. Negative values look up at the subject from below.
+-@export_range(-10.0, 80.0, 1.0) var pitch_deg := 14.0
++@export_range(-10.0, 80.0, 1.0) var pitch_deg := 14.0:
++	set(value):
++		pitch_deg = clampf(value, min_pitch, max_pitch)
++## Orbit limits for pitch_deg, in degrees above the horizon.
++@export var min_pitch := -10.0
++@export var max_pitch := 80.0
+ @export var yaw_deg := 0.0
+ @export var follow_smoothing := 6.0
+ @export var mouse_orbit_sensitivity := 0.25
+ @export var key_orbit_speed := 90.0
+ ## Off while a panel text field has focus, so typing Q or E doesn't orbit.
+ var input_enabled := true
+ 
+ var _pivot := Vector3.ZERO
+ 
+ 
+@@ -26,21 +31,21 @@
+ 	if target:
+ 		_pivot = _goal()
+ 	_place()
+ 
+ 
+ func _unhandled_input(event: InputEvent) -> void:
+ 	if not current:
+ 		return
+ 	if event is InputEventMouseMotion and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT):
+ 		yaw_deg -= event.relative.x * mouse_orbit_sensitivity
+-		pitch_deg = clampf(pitch_deg + event.relative.y * mouse_orbit_sensitivity, -10.0, 80.0)
++		pitch_deg += event.relative.y * mouse_orbit_sensitivity
+ 		user_adjusted.emit()
+ 	elif event is InputEventMouseButton and event.pressed:
+ 		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+ 			distance = maxf(1.0, distance * 0.9)
+ 			user_adjusted.emit()
+ 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+ 			distance = minf(40.0, distance * 1.1)
+ 			user_adjusted.emit()
+ 
+ 
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/scripts/levels/heavens_call.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 15:45:15.917643400 +0800
+@@ -0,0 +1,38 @@
++class_name HeavensCall
++extends Node3D
++## "Heavens call": a tired girl climbs a foggy mountain trail to a summit reveal. This root owns
++## the level's state and its reset; the trail, mood, sound, vista and summit systems hook in here.
++
++## Seconds the screen takes to fade in from black at the start.
++const FADE_IN_SECONDS := 3.0
++
++@onready var player: Player = $Player
++@onready var follow_cam: FollowCamera = $GameplayCamera
++@onready var wind: Wind = $Wind
++@onready var _fade: ColorRect = $UI/Fade
++
++var _player_start: Transform3D
++var _fade_tween: Tween
++
++
++func _ready() -> void:
++	_player_start = player.global_transform
++	reset_scene()
++
++
++## Puts the girl back at the trail start, restarts the fade-in from black, and resets the mood
++## and the sequence (later tasks extend this).
++func reset_scene() -> void:
++	player.global_transform = _player_start
++	player.velocity = Vector3.ZERO
++	follow_cam.yaw_deg = 0.0
++	follow_cam.snap()
++	_restart_fade()
++
++
++func _restart_fade() -> void:
++	if _fade_tween:
++		_fade_tween.kill()
++	_fade.color.a = 1.0
++	_fade_tween = create_tween()
++	_fade_tween.tween_property(_fade, "color:a", 0.0, FADE_IN_SECONDS)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/scripts/player/player.gd scripts/player/player.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/scripts/player/player.gd	2026-11-08 15:39:08.326902800 +0800
++++ scripts/player/player.gd	2026-11-08 15:45:31.414170600 +0800
+@@ -1,41 +1,59 @@
+ class_name Player
+ extends CharacterBody3D
+ ## Minimal third-person walker. Movement is relative to whichever camera is active,
+ ## so it also works from fixed cinematic viewpoints.
+ 
+ @export var walk_speed := 3.5
+ @export var sprint_speed := 7.0
+ @export var acceleration := 10.0
+ @export var turn_speed := 10.0
++## Off in levels where she only walks.
++@export var can_sprint := true
++## The lantern mesh and its light; off for a girl who walks in the dark.
++@export var lantern := true:
++	set(value):
++		lantern = value
++		_apply_lantern()
+ ## Off while another system (e.g. the scout camera) owns the movement keys.
+ var input_enabled := true
+ 
+ var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
+ 
+ @onready var _model: Node3D = $Model
+ 
+ 
++func _ready() -> void:
++	_apply_lantern()
++
++
++func _apply_lantern() -> void:
++	if not is_node_ready():
++		return
++	_model.get_node("Lantern").visible = lantern
++	_model.get_node("LanternLight").visible = lantern
++
++
+ func _physics_process(delta: float) -> void:
+ 	var input := Vector2.ZERO
+ 	if input_enabled:
+ 		input = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+ 	var dir := Vector3.ZERO
+ 	var cam := get_viewport().get_camera_3d()
+ 	if cam and input != Vector2.ZERO:
+ 		var forward := -cam.global_basis.z
+ 		if absf(forward.y) > 0.98:  # looking straight down: use the camera's up as "forward"
+ 			forward = cam.global_basis.y
+ 		forward = Vector3(forward.x, 0.0, forward.z).normalized()
+ 		var right := Vector3(-forward.z, 0.0, forward.x)
+ 		dir = right * input.x - forward * input.y
+ 
+-	var speed := sprint_speed if Input.is_action_pressed("sprint") else walk_speed
++	var speed := sprint_speed if can_sprint and Input.is_action_pressed("sprint") else walk_speed
+ 	var blend := 1.0 - exp(-acceleration * delta)
+ 	velocity.x = lerpf(velocity.x, dir.x * speed, blend)
+ 	velocity.z = lerpf(velocity.z, dir.z * speed, blend)
+ 	velocity.y -= _gravity * delta
+ 	move_and_slide()
+ 
+ 	if dir.length_squared() > 0.01:
+ 		var target_yaw := atan2(dir.x, dir.z)
+ 		_model.rotation.y = lerp_angle(_model.rotation.y, target_yaw, 1.0 - exp(-turn_speed * delta))
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/scenes/levels/heavens_call.tscn scenes/levels/heavens_call.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/scenes/levels/heavens_call.tscn	1970-01-01 08:00:00.000000000 +0800
++++ scenes/levels/heavens_call.tscn	2026-11-08 15:45:15.941290800 +0800
+@@ -0,0 +1,102 @@
++[gd_scene format=3]
++
++[ext_resource type="Script" path="res://scripts/levels/heavens_call.gd" id="1"]
++[ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="2"]
++[ext_resource type="Script" path="res://scripts/camera/follow_camera.gd" id="3"]
++[ext_resource type="Script" path="res://scripts/environment/wind.gd" id="4"]
++[ext_resource type="Shader" path="res://assets/shaders/gradient_sky.gdshader" id="5"]
++[ext_resource type="Material" path="res://assets/materials/ground.tres" id="6"]
++
++[sub_resource type="ShaderMaterial" id="sky_material"]
++shader = ExtResource("5")
++shader_parameter/horizon_color = Color(0.6, 0.62, 0.63, 1)
++shader_parameter/zenith_color = Color(0.36, 0.42, 0.5, 1)
++shader_parameter/glow_size = 0.25
++shader_parameter/glow_energy = 0.48
++
++[sub_resource type="Sky" id="sky"]
++sky_material = SubResource("sky_material")
++
++[sub_resource type="Environment" id="Environment_1"]
++background_mode = 2
++background_color = Color(0.6, 0.62, 0.63, 1)
++sky = SubResource("sky")
++ambient_light_source = 2
++ambient_light_color = Color(0.36, 0.42, 0.5, 1)
++ambient_light_energy = 0.35
++tonemap_mode = 4
++ssao_enabled = true
++glow_enabled = true
++glow_intensity = 0.6
++glow_bloom = 0.05
++fog_enabled = true
++fog_light_color = Color(0.6, 0.62, 0.63, 1)
++fog_sun_scatter = 0.15
++fog_density = 0.009
++fog_aerial_perspective = 0.5
++fog_sky_affect = 0.5
++fog_height = 1.5
++fog_height_density = 0.06
++volumetric_fog_enabled = true
++volumetric_fog_density = 0.004
++volumetric_fog_albedo = Color(0.78, 0.85, 0.95, 1)
++volumetric_fog_anisotropy = 0.45
++volumetric_fog_length = 80.0
++volumetric_fog_ambient_inject = 0.2
++volumetric_fog_sky_affect = 0.0
++
++[sub_resource type="PlaneMesh" id="ground_mesh"]
++size = Vector2(400, 400)
++
++[sub_resource type="BoxShape3D" id="ground_shape"]
++size = Vector3(400, 1, 400)
++
++[node name="HeavensCall" type="Node3D"]
++script = ExtResource("1")
++
++[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
++environment = SubResource("Environment_1")
++
++[node name="Sun" type="DirectionalLight3D" parent="."]
++transform = Transform3D(-0.7071, -0.2418, 0.6645, 0, 0.9397, 0.342, -0.7071, 0.2418, -0.6645, 0, 0, 0)
++light_color = Color(1, 0.88, 0.74, 1)
++light_energy = 1.6
++shadow_enabled = true
++directional_shadow_max_distance = 140.0
++
++[node name="Wind" type="Node" parent="."]
++script = ExtResource("4")
++
++[node name="Ground" type="StaticBody3D" parent="."]
++collision_layer = 3
++
++[node name="Mesh" type="MeshInstance3D" parent="Ground"]
++mesh = SubResource("ground_mesh")
++surface_material_override/0 = ExtResource("6")
++
++[node name="Shape" type="CollisionShape3D" parent="Ground"]
++transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.5, 0)
++shape = SubResource("ground_shape")
++
++[node name="Player" parent="." instance=ExtResource("2")]
++walk_speed = 2.0
++can_sprint = false
++lantern = false
++
++[node name="GameplayCamera" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
++current = true
++fov = 60.0
++far = 600.0
++script = ExtResource("3")
++target = NodePath("../Player")
++min_pitch = -5.0
++max_pitch = 45.0
++
++[node name="UI" type="CanvasLayer" parent="." groups=["overlay"]]
++layer = 10
++
++[node name="Fade" type="ColorRect" parent="UI"]
++anchor_right = 1.0
++anchor_bottom = 1.0
++mouse_filter = 2
++color = Color(0, 0, 0, 1)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tests/run.gd tests/run.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tests/run.gd	2026-11-08 15:39:08.357356700 +0800
++++ tests/run.gd	2026-11-08 15:41:36.972948900 +0800
+@@ -1,18 +1,20 @@
+ extends SceneTree
+-## Runs every tests/test_*.gd against a live playground scene.
++## Runs every tests/test_*.gd against a live scene: the playground, or the scene a file names with
++## `const SCENE := "res://..."`. A scene root with reset_scene() gets it called before each test.
+ ##   Godot --path . -s res://tests/run.gd                  all tests (opens a window)
+ ##   Godot --headless --path . -s res://tests/run.gd       logic only; image tests are skipped
+ ##   Godot --path . -s res://tests/run.gd -- --only=name   files whose name contains "name"
+ ## Exit code 0 = everything passed.
+ 
+ const TEST_DIR := "res://tests"
++const DEFAULT_SCENE := "res://scenes/playground.tscn"
+ 
+ 
+ ## Collects engine and script errors: a runtime error aborts a test function silently, so
+ ## without this a crashed test would still report PASS.
+ class ErrorCatcher extends Logger:
+ 	var errors: Array[String] = []
+ 	var _mutex := Mutex.new()
+ 
+ 	func _log_error(function: String, file: String, line: int, code: String, rationale: String,
+ 			_editor_notify: bool, _error_type: int, _script_backtraces: Array[ScriptBacktrace]) -> void:
+@@ -32,60 +34,79 @@
+ 	_run.call_deferred()
+ 
+ 
+ func _run() -> void:
+ 	var only := ""
+ 	for arg in OS.get_cmdline_user_args():
+ 		if arg.begins_with("--only="):
+ 			only = arg.trim_prefix("--only=")
+ 	var catcher := ErrorCatcher.new()
+ 	OS.add_logger(catcher)
+-	var pg: Node = load("res://scenes/playground.tscn").instantiate()
+-	root.add_child(pg)
+-	for i in 30:  # let shadows, SSAO and the forest settle
+-		await process_frame
+ 	var passed := 0
+ 	var failed := 0
+ 	var skipped := 0
+ 	var files := Array(DirAccess.get_files_at(TEST_DIR))
+ 	files.sort()
++	# Group the test files by the scene they run against (const SCENE, default: the playground).
++	# Each distinct scene is instantiated once; the playground group runs first.
++	var scenes: Array[String] = [DEFAULT_SCENE]
++	var by_scene := {DEFAULT_SCENE: []}
+ 	for file: String in files:
+ 		if not (file.begins_with("test_") and file.ends_with(".gd")):
+ 			continue
+ 		if only != "" and not file.contains(only):
+ 			continue
+ 		var script: GDScript = load(TEST_DIR.path_join(file))
+ 		catcher.take()  # a parse error is reported below as a FAIL of its own
+ 		if script == null or not script.can_instantiate():
+ 			failed += 1
+ 			print("FAIL %s (does not parse; see the error above)" % file)
+ 			continue
+-		for method in script.get_script_method_list():
+-			var test_name: String = method["name"]
+-			if not test_name.begins_with("test_"):
+-				continue
+-			var case = script.new()
+-			case.tree = self
+-			pg.reset_scene()
+-			catcher.take()  # errors before this test aren't its fault
+-			if case.has_method("before_each"):
+-				await case.before_each(pg)
+-			await case.call(test_name, pg)
+-			if case.has_method("after_each"):
+-				await case.after_each(pg)
+-			for error in catcher.take():
+-				if not case.expected_errors.any(func(fragment: String) -> bool: return error.contains(fragment)):
+-					case.failures.append("engine/script error: " + error)
+-			var label := "%s::%s" % [file.get_basename(), test_name]
+-			if case.skipped != "":
+-				skipped += 1
+-				print("SKIP %s (%s)" % [label, case.skipped])
+-			elif case.failures.is_empty():
+-				passed += 1
+-				print("PASS %s" % label)
+-			else:
+-				failed += 1
+-				print("FAIL %s" % label)
+-				for message in case.failures:
+-					print("     - %s" % message)
++		var scene_path: String = script.get_script_constant_map().get("SCENE", DEFAULT_SCENE)
++		if not by_scene.has(scene_path):
++			by_scene[scene_path] = []
++			scenes.append(scene_path)
++		by_scene[scene_path].append([file, script])
++	for scene_path in scenes:
++		if by_scene[scene_path].is_empty():
++			continue
++		var pg: Node = load(scene_path).instantiate()
++		root.add_child(pg)
++		for i in 30:  # let shadows, SSAO and the forest settle
++			await process_frame
++		for entry: Array in by_scene[scene_path]:
++			var file: String = entry[0]
++			var script: GDScript = entry[1]
++			for method in script.get_script_method_list():
++				var test_name: String = method["name"]
++				if not test_name.begins_with("test_"):
++					continue
++				var case = script.new()
++				case.tree = self
++				if pg.has_method("reset_scene"):
++					pg.reset_scene()
++				catcher.take()  # errors before this test aren't its fault
++				if case.has_method("before_each"):
++					await case.before_each(pg)
++				await case.call(test_name, pg)
++				if case.has_method("after_each"):
++					await case.after_each(pg)
++				for error in catcher.take():
++					if not case.expected_errors.any(func(fragment: String) -> bool: return error.contains(fragment)):
++						case.failures.append("engine/script error: " + error)
++				var label := "%s::%s" % [file.get_basename(), test_name]
++				if case.skipped != "":
++					skipped += 1
++					print("SKIP %s (%s)" % [label, case.skipped])
++				elif case.failures.is_empty():
++					passed += 1
++					print("PASS %s" % label)
++				else:
++					failed += 1
++					print("FAIL %s" % label)
++					for message in case.failures:
++						print("     - %s" % message)
++		root.remove_child(pg)
++		pg.free()
++		await process_frame
+ 	print("\n%d passed, %d failed, %d skipped" % [passed, failed, skipped])
+ 	quit(1 if failed > 0 else 0)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tests/test_grass_scene.gd tests/test_grass_scene.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tests/test_grass_scene.gd	2026-11-08 15:39:08.377093300 +0800
++++ tests/test_grass_scene.gd	2026-11-08 15:41:17.350292800 +0800
+@@ -10,24 +10,31 @@
+ 
+ func test_grass_visible_param(pg) -> void:
+ 	check_eq(pg.PARAM_ORDER.find("grass_visible"), pg.PARAM_ORDER.find("props_visible") + 1, "param order")
+ 	pg.set_param("grass_visible", false)
+ 	check(not pg.grass.visible, "toggle hides the field")
+ 	pg.reset_scene()
+ 	check(pg.grass.visible, "default is on")
+ 
+ 
+ func test_path_is_clear_of_grass(pg) -> void:
++	# The shipped mask is hand-painted; this checks the starter generator's own output.
++	var gen: GDScript = load("res://tools/make_starter_grass.gd")
++	var mask: Image = gen.call("build_mask", pg)
++	var corner: Vector2 = gen.FIELD_CENTRE - gen.FIELD_EXTENT * 0.5
+ 	for node_name in ["Path", "SideTrail"]:
+ 		var pts: PackedVector2Array = pg.get_node(node_name).get_centerline_world()
+ 		for p in pts:
+-			check_near(pg.grass.sample(p).x, 0.0, 0.01, "no grass on the %s centreline" % node_name)
++			var t: Vector2 = (p - corner) / gen.TEXEL
++			var x := clampi(floori(t.x), 0, mask.get_width() - 1)
++			var y := clampi(floori(t.y), 0, mask.get_height() - 1)
++			check_near(mask.get_pixel(x, y).r, 0.0, 0.01, "starter generator leaves the %s centreline clear" % node_name)
+ 
+ 
+ func test_clearing_is_clear_of_grass(pg) -> void:
+ 	var c: Vector3 = pg.get_node("Clearing").global_position
+ 	for off in [Vector2.ZERO, Vector2(6, 0), Vector2(0, -7), Vector2(-5, 5)]:
+ 		check_near(pg.grass.sample(Vector2(c.x, c.z) + off).x, 0.0, 0.01, "no grass in the clearing")
+ 
+ 
+ func test_grass_on_mounds(pg) -> void:
+ 	await frames(2)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tests/test_heavens_basics.gd tests/test_heavens_basics.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tests/test_heavens_basics.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_heavens_basics.gd	2026-11-08 15:40:43.391120500 +0800
+@@ -0,0 +1,33 @@
++extends "res://tests/case.gd"
++## Heavens call level basics: the girl, her camera and the fade-in.
++
++const SCENE := "res://scenes/levels/heavens_call.tscn"
++
++
++func test_girl_has_no_lantern(lv) -> void:
++	check(not lv.player.get_node("Model/Lantern").visible, "lantern mesh hidden")
++	check(not lv.player.get_node("Model/LanternLight").visible, "lantern light off")
++
++
++func test_no_sprint_in_level(lv) -> void:
++	Input.action_press("sprint")
++	Input.action_press("move_forward")
++	await seconds(1.5)
++	var v := Vector2(lv.player.velocity.x, lv.player.velocity.z).length()
++	Input.action_release("move_forward")
++	Input.action_release("sprint")
++	check(v <= 2.05, "speed capped at walk 2.0 with sprint held")
++	check(v >= 1.8, "she does walk at about 2 m/s")
++
++
++func test_camera_pitch_limited(lv) -> void:
++	lv.follow_cam.pitch_deg = 80.0
++	check_near(lv.follow_cam.pitch_deg, 45.0, 0.01, "pitch clamped to max_pitch")
++
++
++func test_fades_in_from_black(lv) -> void:
++	var fade: ColorRect = lv.get_node("UI/Fade")
++	lv.reset_scene()
++	check(fade.color.a > 0.9, "starts black")
++	await seconds(3.3)
++	check(fade.color.a < 0.05, "faded in after 3 s")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tests/test_smoke.gd tests/test_smoke.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tests/test_smoke.gd	2026-11-08 15:39:08.361271400 +0800
++++ tests/test_smoke.gd	2026-11-08 15:40:43.414109400 +0800
+@@ -9,10 +9,16 @@
+ func test_reset_restores_a_changed_param(pg) -> void:
+ 	pg.set_param("sun_glow", 0.9)
+ 	pg.reset_scene()
+ 	check_near(pg.get_param("sun_glow"), 0.15, 0.001, "sun_glow after reset")
+ 
+ 
+ func test_window_check_skips_when_headless(_pg) -> void:
+ 	if not needs_window():
+ 		return
+ 	check(true, "running with a window")
++
++
++func test_playground_player_unchanged(pg) -> void:
++	check(pg.player.can_sprint, "playground player sprints")
++	check(pg.player.lantern, "playground player keeps her lantern")
++	check_eq(pg.player.walk_speed, 3.5, "playground walk speed")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tools/make_starter_grass.gd tools/make_starter_grass.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/base/tools/make_starter_grass.gd	2026-11-08 15:39:08.380711900 +0800
++++ tools/make_starter_grass.gd	2026-11-08 15:44:52.755547100 +0800
+@@ -10,20 +10,29 @@
+ const TEXEL := 0.5
+ const PATH_CLEAR := 1.0  ## metres beyond the path's half-width with no grass
+ const PATH_RAMP := 2.0  ## ...then density ramps to full over this much more
+ const HEIGHT_NEAR := 0.3
+ const HEIGHT_FAR := 0.9
+ const HEIGHT_FAR_AT := 15.0
+ 
+ 
+ func _init() -> void:
+ 	var scene: Node = load("res://scenes/playground.tscn").instantiate()
++	var image := build_mask(scene)
++	var err := ResourceSaver.save(image, OUT)
++	print("starter grass mask %s: %s" % [image.get_size(), "saved" if err == OK else "error %d" % err])
++	scene.free()
++	quit(0 if err == OK else 1)
++
++
++## The starter mask for `scene` (a playground), built in memory; nothing is written.
++static func build_mask(scene: Node) -> Image:
+ 	var lines: Array = []  # [PackedVector2Array centreline, PackedFloat32Array half widths]
+ 	for node_name in ["Path", "SideTrail"]:
+ 		var n: Node = scene.get_node(node_name)
+ 		var xf: Transform3D = Transform3D(n.transform)
+ 		var pts := PackedVector2Array()
+ 		var halves := PackedFloat32Array()
+ 		var samples: PackedVector2Array = n.call("_sample")
+ 		for i in samples.size():
+ 			var w := xf * Vector3(samples[i].x, 0.0, samples[i].y)
+ 			pts.append(Vector2(w.x, w.z))
+@@ -59,25 +68,21 @@
+ 			var density := patch * smoothstep(PATH_CLEAR, PATH_CLEAR + PATH_RAMP, d)
+ 			if p.distance_to(clearing_c) <= clearing_r + 0.5:
+ 				density = 0.0
+ 			var h_t := clampf(maxf(d, 0.0) / HEIGHT_FAR_AT, 0.0, 1.0)
+ 			var h := lerpf(HEIGHT_NEAR, HEIGHT_FAR, h_t) + hnoise.get_noise_2d(p.x, p.y) * 0.08
+ 			# G is 0..1 across min_height..max_height (0.25..0.9); store the target metres.
+ 			var g := clampf((h - 0.25) / (0.9 - 0.25), 0.0, 1.0)
+ 			var i := (y * size.x + x) * 2
+ 			data[i] = roundi(clampf(density, 0.0, 1.0) * 255.0)
+ 			data[i + 1] = roundi(g * 255.0)
+-	var image := Image.create_from_data(size.x, size.y, false, Image.FORMAT_RG8, data)
+-	var err := ResourceSaver.save(image, OUT)
+-	print("starter grass mask %s: %s" % [size, "saved" if err == OK else "error %d" % err])
+-	scene.free()
+-	quit(0 if err == OK else 1)
++	return Image.create_from_data(size.x, size.y, false, Image.FORMAT_RG8, data)
+ 
+ 
+ ## Distance from p to the path's edge (negative inside), by nearest centreline segment.
+ static func _dist_beyond_edge(p: Vector2, pts: PackedVector2Array, halves: PackedFloat32Array) -> float:
+ 	var best := INF
+ 	for i in pts.size() - 1:
+ 		var a := pts[i]
+ 		var ab := pts[i + 1] - a
+ 		var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
+ 		best = minf(best, p.distance_to(a + ab * t) - lerpf(halves[i], halves[i + 1], t))
+# new/changed binary or audio files:

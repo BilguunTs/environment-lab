@@ -1,0 +1,67 @@
+Godot Engine v4.6.stable.mono.official.89cea1439 - https://godotengine.org
+Vulkan 1.4.341 - Forward+ - Using Device #0: NVIDIA - NVIDIA GeForce RTX 3070
+
+PASS test_compare::test_fmt
+PASS test_compare::test_pin_then_change_gives_one_diff_line
+PASS test_compare::test_hold_x_shows_a_and_release_restores_b
+PASS test_compare::test_view_and_value_view_are_not_compared
+PASS test_compare::test_lens_is_compared_in_the_pinned_view
+PASS test_compare::test_flip_needs_a_pin
+PASS test_compare::test_pin_refused_in_scout
+PASS test_compare::test_entering_scout_releases_a
+PASS test_compare::test_focus_loss_releases_a
+PASS test_compare::test_hud_tag
+PASS test_compare_pair::test_log_row_format
+PASS test_compare_pair::test_save_pair_without_a_does_nothing
+PASS test_compare_pair::test_save_pair_writes_side_by_side_png
+PASS test_compare_split::test_split_needs_a_pin
+PASS test_compare_split::test_split_captures_a_frozen_image
+PASS test_compare_split::test_value_view_change_recaptures_a
+PASS test_compare_split::test_flip_ignored_while_capturing
+PASS test_compare_split::test_scout_leaves_split
+Screenshot: D:/DevEnv/GDOT/environment-lab/screenshots/2026-10-12T09-38-56_overlay_check.png
+PASS test_compare_split::test_screenshot_still_hides_overlays
+PASS test_debug_draw::test_render_mode_sets_viewport_debug_draw
+PASS test_debug_draw::test_render_mode_is_not_scene_state
+PASS test_debug_draw::test_each_render_mode_looks_different
+PASS test_perf_hud::test_format
+PASS test_perf_hud::test_hud_updates_when_on
+PASS test_perf_hud::test_cpu_ms_is_work_not_frame_time
+PASS test_presets::test_overrides_keep_only_changed_keys
+PASS test_presets::test_save_then_all_round_trips_values
+PASS test_presets::test_saving_same_name_overwrites
+PASS test_presets::test_rejects_bad_names
+ERROR: ConfigFile parse error at user://test_presets.cfg:0: Unexpected EOF while parsing simple tag.
+   at: _parse (core/io/config_file.cpp:292)
+   GDScript backtrace (most recent call first):
+       [0] save_user (res://scripts/presets.gd:176)
+       [1] test_broken_file_is_not_overwritten (res://tests/test_presets.gd:62)
+       [2] _run (res://tests/run.gd:72)
+       [3] test_cpu_ms_is_work_not_frame_time (res://tests/test_perf_hud.gd:32)
+       [4] seconds (res://tests/case.gd:39)
+ERROR: ConfigFile parse error at user://test_presets.cfg:0: Unexpected EOF while parsing simple tag.
+   at: _parse (core/io/config_file.cpp:292)
+   GDScript backtrace (most recent call first):
+       [0] all (res://scripts/presets.gd:136)
+       [1] test_broken_file_is_not_overwritten (res://tests/test_presets.gd:64)
+       [2] _run (res://tests/run.gd:72)
+       [3] test_cpu_ms_is_work_not_frame_time (res://tests/test_perf_hud.gd:32)
+       [4] seconds (res://tests/case.gd:39)
+PASS test_presets::test_broken_file_is_not_overwritten
+PASS test_presets::test_missing_file_means_builtins_only
+PASS test_presets_ui::test_saved_preset_appears_and_loads
+PASS test_presets_ui::test_refused_name_keeps_grid
+PASS test_presets_ui::test_unknown_preset_is_ignored
+PASS test_presets_ui::test_typing_blocks_player_movement
+PASS test_presets_ui::test_clicking_the_scene_ends_typing
+PASS test_smoke::test_scene_starts_in_gameplay_view
+PASS test_smoke::test_reset_restores_a_changed_param
+PASS test_smoke::test_window_check_skips_when_headless
+PASS test_value_probe::test_luminance_weights
+PASS test_value_probe::test_measure_half_black_half_white
+PASS test_value_probe::test_measure_skips_excluded_rects
+PASS test_value_probe::test_probe_matches_stage7_measurements
+     probe sample: 14.8 ms
+PASS test_value_probe::test_sample_cost
+
+44 passed, 0 failed, 0 skipped

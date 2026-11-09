@@ -1,0 +1,500 @@
+# Final fix wave diff (diff -ruN --strip-trailing-cr, pre-fix snapshot -> current)
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/environment/grass_brush.gd scripts/environment/grass_brush.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/environment/grass_brush.gd	2026-11-08 12:20:33.357853600 +0800
++++ scripts/environment/grass_brush.gd	2026-11-08 12:24:48.419163800 +0800
+@@ -65,8 +65,26 @@
+ 		return null
+ 	var space := field.get_world_3d().direct_space_state
+ 	if space == null:
+ 		return null
+ 	var query := PhysicsRayQueryParameters3D.create(from, from + dir.normalized() * RAY_LENGTH,
+ 			1 << (field.ground_layer - 1))
+ 	var hit := space.intersect_ray(query)
+ 	return hit.position if hit else null
++
++
++## True when painting `mask` in the scene saved at `scene_path` would overwrite a mask another
++## field or scene owns, so the painter must paint a copy (saved as <scene>_grass[_N].res) instead:
++## another GrassField of the scene holds the same mask (`other_masks`, e.g. after Ctrl+D), or the
++## mask's file isn't this scene's (named <scene>_grass*, in any folder, or embedded in the scene).
++static func mask_needs_fork(mask: Image, scene_path: String, other_masks: Array) -> bool:
++	if mask == null:
++		return false
++	for other in other_masks:
++		if is_same(other, mask):
++			return true
++	var path := mask.resource_path
++	if path.is_empty() or scene_path.is_empty():
++		return false  # unsaved mask (the painter saves it next to the scene), or unknown scene
++	if path.contains("::"):
++		return path.get_slice("::", 0) != scene_path
++	return not path.get_file().begins_with(scene_path.get_file().get_basename() + "_grass")
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/environment/wind.gd scripts/environment/wind.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/environment/wind.gd	2026-11-08 12:20:33.358869600 +0800
++++ scripts/environment/wind.gd	2026-11-08 12:23:52.644797100 +0800
+@@ -1,50 +1,67 @@
+ @tool
+ class_name Wind
+ extends Node
+ ## The scene's wind: a strength, a compass direction and a gust field that travels with it.
+-## Publishes three global shader uniforms (wind_strength, wind_direction, wind_offset) that
+-## wind.gdshaderinc reads. The offset is integrated here, never derived from TIME * speed, so
+-## changing strength or direction can't make the gust pattern jump.
++## Publishes three global shader uniforms (wind_strength, wind_direction, wind_phase) that
++## wind.gdshaderinc reads. The phase is how far the gust pattern has travelled along the wind, in
++## pattern space: it is integrated here (never derived from TIME * speed), so changing strength
++## can't make the pattern jump, and because it isn't a world-space offset, turning the wind only
++## rotates the pattern about the world origin, however long the scene has run.
+ 
+ ## Metres per second the gust pattern travels at strength 1.0.
+ const GUST_SPEED := 4.0
++## Size of one gust noise cell along the wind and across it, in metres (wind_gust in the include).
++const GUST_CELL_ALONG := 20.0
++const GUST_CELL_ACROSS := 40.0
++## The phase wraps at this many metres so float32 precision never stalls the scroll. It is a whole
++## number of cells of both noise octaves (100 and 230), and wind_gust's noise repeats along the
++## wind with exactly this period, so the wrap is invisible.
++const PHASE_PERIOD := 2000.0
+ 
+ ## 0 = calm, 1 = the Stage 8 look, 2 = storm.
+ @export_range(0, 2) var strength := 0.6:
+ 	set(value):
+ 		strength = value
+ 		_publish("wind_strength", value)
+ ## Compass angle the wind blows toward: 0 = toward -Z, 90 = toward +X, clockwise from above.
+ @export_range(0, 360) var direction_degrees := 53.13:
+ 	set(value):
+ 		direction_degrees = value
+ 		_publish("wind_direction", vector())
+-## How far the gust pattern has travelled, in metres.
+-var offset := Vector2.ZERO
++## How far the gust pattern has travelled downwind, in metres, wrapped to [0, PHASE_PERIOD).
++var phase := 0.0
+ 
+ 
+ func _ready() -> void:
+ 	_publish("wind_strength", strength)
+ 	_publish("wind_direction", vector())
+-	_publish("wind_offset", offset)
++	_publish("wind_phase", phase)
+ 
+ 
+ func _process(delta: float) -> void:
+-	offset += vector() * strength * GUST_SPEED * delta
+-	_publish("wind_offset", offset)
++	phase = fposmod(phase + strength * GUST_SPEED * delta, PHASE_PERIOD)
++	_publish("wind_phase", phase)
+ 
+ 
+ ## Unit vector on the ground plane (x, z) the wind blows toward.
+ static func vector_for(degrees: float) -> Vector2:
+ 	var rad := deg_to_rad(degrees)
+ 	return Vector2(sin(rad), -cos(rad))
+ 
+ 
++## Where a world position samples the gust noise, in noise cells (x along the wind, y across it).
++## Mirrors `q` in wind_gust (assets/shaders/wind.gdshaderinc); keep the two in step.
++static func pattern_coord(world_xz: Vector2, direction: Vector2, gust_phase: float) -> Vector2:
++	var across := Vector2(-direction.y, direction.x)
++	return Vector2((world_xz.dot(direction) - gust_phase) / GUST_CELL_ALONG,
++			world_xz.dot(across) / GUST_CELL_ACROSS)
++
++
+ func vector() -> Vector2:
+ 	return vector_for(direction_degrees)
+ 
+ 
+ ## A no-op when the global doesn't exist (a project without the shader_globals entries).
+ func _publish(global_name: String, value: Variant) -> void:
+ 	if ProjectSettings.has_setting("shader_globals/" + global_name):
+ 		RenderingServer.global_shader_parameter_set(global_name, value)
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_grass_brush.gd tests/test_grass_brush.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_grass_brush.gd	2026-11-08 12:20:33.398718500 +0800
++++ tests/test_grass_brush.gd	2026-11-08 12:24:39.611397700 +0800
+@@ -44,8 +44,32 @@
+ 	check_eq(f.mask.get_data(), pair[0].get_data(), "undo restores the exact mask")
+ 	check_eq(f.blade_count(), 0, "undo removes the blades")
+ 
+ 
+ func test_ray_to_ground(pg) -> void:
+ 	var hit = GrassBrush.ray_to_ground(f, Vector3(0, 10, -6), Vector3.DOWN)
+ 	check(hit is Vector3 and absf(hit.y) < 0.05, "brush ray lands on the Ground plane")
+ 	check(GrassBrush.ray_to_ground(f, Vector3(0, 10, -6), Vector3.UP) == null, "ray into the sky misses")
++
++
++func test_shared_mask_needs_fork(_pg) -> void:
++	var scene := "res://scenes/level.tscn"
++	var own := Image.create(4, 4, false, Image.FORMAT_RG8)
++	check(not GrassBrush.mask_needs_fork(own, scene, []), "a fresh unsaved mask is saved, not forked")
++	own.take_over_path("res://scenes/level_grass.res")
++	check(not GrassBrush.mask_needs_fork(own, scene, []), "the scene's own mask file is painted in place")
++	check(GrassBrush.mask_needs_fork(own, scene, [own]), "a duplicate (Ctrl+D) holding the same mask forks")
++	var other := Image.create(4, 4, false, Image.FORMAT_RG8)
++	check(not GrassBrush.mask_needs_fork(own, scene, [other]), "a sibling with its own mask doesn't force a fork")
++	var pasted := Image.create(4, 4, false, Image.FORMAT_RG8)
++	pasted.take_over_path("res://scenes/playground_grass_test_only.res")
++	check(GrassBrush.mask_needs_fork(pasted, scene, []), "a mask pasted from another scene forks")
++	check(not GrassBrush.mask_needs_fork(pasted, "res://somewhere/playground.tscn", []),
++			"a <scene>_grass file in another folder still belongs to the scene")
++	var embedded := Image.create(4, 4, false, Image.FORMAT_RG8)
++	embedded.take_over_path("res://scenes/other.tscn::Image_abc")
++	check(GrassBrush.mask_needs_fork(embedded, scene, []), "a mask embedded in another scene forks")
++	check(not GrassBrush.mask_needs_fork(embedded, "res://scenes/other.tscn", []), "embedded in this scene: no fork")
++	# The playground's starter meadow lives in assets/grass/, not next to the scene.
++	var pg_mask: Image = load("res://assets/grass/playground_grass.res")
++	check(not GrassBrush.mask_needs_fork(pg_mask, "res://scenes/playground.tscn", []), "playground Grass keeps playground_grass.res")
++	check(not GrassBrush.mask_needs_fork(null, scene, []), "no mask, nothing to fork")
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_wind.gd tests/test_wind.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_wind.gd	2026-11-08 12:20:33.398718500 +0800
++++ tests/test_wind.gd	2026-11-08 12:23:32.941561600 +0800
+@@ -34,22 +34,40 @@
+ 	var before: Vector3 = pg.mist.material.get_shader_parameter("offset")
+ 	await frames(10)
+ 	var after: Vector3 = pg.mist.material.get_shader_parameter("offset")
+ 	check(after.x < before.x, "mist noise scrolls with the wind (offset decreases along +X)")
+ 	check_near(after.z, before.z, 0.0001, "mist doesn't drift in Z at 90°")
+ 
+ 
+ func test_gust_offset_has_no_jump(pg) -> void:
+-	pg.set_param("wind", 0.5)
+-	await frames(2)
+-	var before: Vector2 = pg.wind.offset
+-	pg.set_param("wind", 2.0)
+-	pg.set_param("wind_direction", pg.get_param("wind_direction") + 180.0)
+-	await frames(1)
+-	check(pg.wind.offset.distance_to(before) < 1.0, "offset keeps integrating; no jump")
++	# Ten minutes of default wind, then a 1° turn: the gust pattern at a sample point must move by
++	# a hair, not by whole noise cells (the old offset grew along past directions without bound).
++	pg.set_param("wind", 0.6)
++	for i in 600:
++		pg.wind._process(1.0)
++	var sample := Vector2(30.0, -25.0)
++	var q0: Vector2 = Wind.pattern_coord(sample, pg.wind.vector(), pg.wind.phase)
++	pg.set_param("wind_direction", pg.get_param("wind_direction") + 1.0)
++	var q1: Vector2 = Wind.pattern_coord(sample, pg.wind.vector(), pg.wind.phase)
++	check(q0.distance_to(q1) < 0.1, "1° turn moves the gust pattern < 0.1 noise cell (moved %.3f)" % q0.distance_to(q1))
++
++
++func test_gust_phase_advance(pg) -> void:
++	pg.wind.strength = 0.5
++	pg.wind.phase = 10.0
++	pg.wind._process(0.1)
++	check_near(pg.wind.phase, 10.0 + 0.5 * Wind.GUST_SPEED * 0.1, 0.00001, "phase advances strength * GUST_SPEED * delta")
++	# Near the wrap the phase rebases by PHASE_PERIOD; the pattern doesn't notice (the noise is
++	# periodic along the wind with exactly that period).
++	pg.wind.phase = Wind.PHASE_PERIOD - 0.1
++	pg.wind._process(0.1)
++	check(pg.wind.phase >= 0.0 and pg.wind.phase < Wind.PHASE_PERIOD, "phase wraps into [0, PHASE_PERIOD)")
++	check_near(pg.wind.phase, 0.1, 0.0001, "phase rebased by the period")
++	var cells_per_period := Wind.PHASE_PERIOD / Wind.GUST_CELL_ALONG
++	check_near(cells_per_period, roundf(cells_per_period), 0.0001, "period is a whole number of cells")
+ 
+ 
+ func test_no_hardcoded_wind_dir(pg) -> void:
+ 	check(not pg.get_script().get_script_constant_map().has("WIND_DIR"), "WIND_DIR constant removed")
+ 	var src := FileAccess.get_file_as_string("res://assets/materials/flat_color.gdshader")
+ 	check(not src.contains("WIND_DIR"), "flat_color uses wind_direction")
+ 	check(src.contains("wind.gdshaderinc"), "flat_color shares the gust include")
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/addons/grass_painter/plugin.gd addons/grass_painter/plugin.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/addons/grass_painter/plugin.gd	2026-11-08 12:20:33.415935100 +0800
++++ addons/grass_painter/plugin.gd	2026-11-08 12:25:03.824349100 +0800
+@@ -17,16 +17,17 @@
+ var _field: GrassField
+ var _stroke_mode := GrassField.PaintMode.DENSITY  # the toolbar mode, restored after a Shift stroke
+ 
+ var _toolbar: HBoxContainer
+ var _mode_button: OptionButton
+ var _radius_box: SpinBox
+ var _strength_box: SpinBox
+ var _target_box: SpinBox
++var _falloff_box: SpinBox
+ 
+ var _cursor: MeshInstance3D
+ var _cursor_mesh: ImmediateMesh
+ var _cursor_material: StandardMaterial3D
+ var _cursor_at: Variant = null  # last brush position on the ground, or null
+ 
+ var _last_origin := Vector3.INF
+ var _moved_for := -1.0  # seconds since the field last moved; < 0 = not waiting
+@@ -107,16 +108,17 @@
+ 			if button.alt_pressed or button.ctrl_pressed or button.meta_pressed:
+ 				return AFTER_GUI_INPUT_PASS  # leave modified clicks to the editor
+ 			var hit: Variant = _ground_under(camera, button.position)
+ 			if hit == null:
+ 				return AFTER_GUI_INPUT_PASS
+ 			_stroke_mode = _brush.mode
+ 			if button.shift_pressed:
+ 				_brush.mode = GrassField.PaintMode.ERASE
++			_fork_shared_mask(_field)
+ 			_brush.begin(_field)
+ 			_brush.dab(hit)
+ 			_show_cursor(hit)
+ 			return AFTER_GUI_INPUT_STOP
+ 		if _brush.is_painting():
+ 			_end_stroke()
+ 			return AFTER_GUI_INPUT_STOP
+ 		return AFTER_GUI_INPUT_PASS
+@@ -149,16 +151,35 @@
+ 	undo.add_do_method(field, "set_mask_data", pair[1])
+ 	undo.add_undo_method(field, "set_mask_data", pair[0])
+ 	if saved:  # keep the .res file in step with undo / redo
+ 		undo.add_do_method(ResourceSaver, "save", field.mask, "", 0)
+ 		undo.add_undo_method(ResourceSaver, "save", field.mask, "", 0)
+ 	undo.commit_action(false)  # the stroke is already painted
+ 
+ 
++## Gives `field` its own copy of its mask when the mask belongs to another field or scene (a
++## Ctrl+D duplicate, or a field pasted from another scene), so _save_mask writes a new
++## <scene>_grass[_N].res instead of overwriting the other's file. The fork isn't undoable: the
++## stroke's undo restores the copy's pixels, and the original file is never touched.
++func _fork_shared_mask(field: GrassField) -> void:
++	var root := EditorInterface.get_edited_scene_root()
++	var scene_path := root.scene_file_path if root != null else ""
++	var others: Array = []
++	if root != null:
++		var stack: Array[Node] = [root]
++		while not stack.is_empty():
++			var node: Node = stack.pop_back()
++			stack.append_array(node.get_children())
++			if node is GrassField and node != field:
++				others.append((node as GrassField).mask)
++	if GrassBrush.mask_needs_fork(field.mask, scene_path, others):
++		field.mask = field.mask.duplicate()  # a copy has no resource_path, so it gets a new file
++
++
+ ## Writes the mask to its .res file. A mask without a file of its own is saved next to the
+ ## edited scene as <scene_name>_grass.res (or _grass_2.res, ... if that name is taken).
+ func _save_mask(field: GrassField) -> bool:
+ 	var mask := field.mask
+ 	var path := mask.resource_path
+ 	if not path.is_empty() and not path.contains("::"):
+ 		return ResourceSaver.save(mask) == OK
+ 	var root := EditorInterface.get_edited_scene_root()
+@@ -257,16 +278,19 @@
+ 	_toolbar.add_child(_mode_button)
+ 
+ 	_radius_box = _add_spin("Radius", RADIUS_MIN, RADIUS_MAX, 0.1, _brush.radius, " m",
+ 			"Brush radius in metres ([ / ] scale it).", _on_radius_changed)
+ 	_strength_box = _add_spin("Strength", 0.05, 1.0, 0.05, _brush.strength, "",
+ 			"How far each dab moves the mask toward the target.", _on_strength_changed)
+ 	_target_box = _add_spin("Target", 0.0, 1.0, 0.05, _brush.target, "",
+ 			"Density (Density mode) or height (Height mode) to paint toward.", _on_target_changed)
++	_falloff_box = _add_spin("Falloff", 0.0, 1.0, 0.05, _brush.falloff, "",
++			"Fraction of the radius over which a dab fades out at its rim (0 = hard edge).",
++			_on_falloff_changed)
+ 
+ 
+ func _on_mode_selected(index: int) -> void:
+ 	_brush.mode = _mode_button.get_item_id(index) as GrassField.PaintMode
+ 	_stroke_mode = _brush.mode
+ 
+ 
+ func _on_radius_changed(value: float) -> void:
+@@ -278,16 +302,20 @@
+ func _on_strength_changed(value: float) -> void:
+ 	_brush.strength = value
+ 
+ 
+ func _on_target_changed(value: float) -> void:
+ 	_brush.target = value
+ 
+ 
++func _on_falloff_changed(value: float) -> void:
++	_brush.falloff = value
++
++
+ func _add_spin(label: String, lo: float, hi: float, step: float, value: float, suffix: String,
+ 		tooltip: String, on_change: Callable) -> SpinBox:
+ 	var text := Label.new()
+ 	text.text = label
+ 	_toolbar.add_child(text)
+ 	var box := SpinBox.new()
+ 	box.min_value = lo
+ 	box.max_value = hi
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/project.godot	2026-11-08 12:20:33.415935100 +0800
++++ project.godot	2026-11-08 12:23:56.507780900 +0800
+@@ -82,12 +82,12 @@
+ wind_strength={
+ "type": "float",
+ "value": 0.6
+ }
+ wind_direction={
+ "type": "vec2",
+ "value": Vector2(0.8, -0.6)
+ }
+-wind_offset={
+-"type": "vec2",
+-"value": Vector2(0, 0)
++wind_phase={
++"type": "float",
++"value": 0.0
+ }
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/README.md	2026-11-08 12:20:33.430967300 +0800
++++ README.md	2026-11-08 12:25:26.864023400 +0800
+@@ -148,42 +148,45 @@
+ - To frame a viewpoint, select a camera under **Viewpoints** and tick *Preview* in the 3D viewport. Then move the camera or change its FOV.
+ - Scale reference: 1 unit = 1 m. The player is about 1.8 m tall, spruces are 10–16 m, larches about 11 m, and the monolith tops out around 26 m.
+ 
+ ## Wind sway on materials
+ 
+ `flat_color.gdshader` sways vertices by `sway × wind × height²`, using world height above the
+ ground. Every part of one object must use the same `sway` value: spruce trunk and foliage share
+ 0.35, and dead trees use 0.2. Otherwise the crown slides off the trunk. Rocks and the ground use 0
+-(rigid). Wind is a global shader parameter (`shader_globals/wind_strength` in Project Settings),
+-set at runtime by the Wind slider.
++(rigid). Wind comes from the `Wind` node, which publishes three global shader parameters
++(`[shader_globals]` in `project.godot`): `wind_strength`, `wind_direction` and `wind_phase` (how
++far the gusts have travelled downwind). The Wind and Wind direction sliders set the node.
+ 
+ Performance (RTX 3070, 1600×900): about 850 fps with everything on. Volumetrics cost about
+ 0.13 ms per frame and wind sway about 0.07 ms.
+ 
+ ## Grass and wind
+ 
+ `Grass` is a `GrassField`: a rectangle of blades driven by a painted mask (R = density, G = height),
+ drawn as chunked MultiMeshes with a wind-driven shader. Blades sit on ground found by a ray against
+ physics layer 2 (`ground`), so walkable ground needs collision on layers 1 + 2, and a spot with no
+ ground gets no blade. The wind comes from the `Wind` node: strength, a compass direction and a gust
+ field that travels with it, shared by the grass, trees and cloth. Direction is the angle the wind
+-blows **toward**: 0 = toward -Z, 90 = toward +X, clockwise from above (default 53.13: mostly +X with a bit of -Z).
+-Gusts show as waves rolling across the meadow.
++blows **toward**: 0 = toward -Z, 90 = toward +X, clockwise from above (default 53.13: mostly +X
++with a bit of -Z). Gusts show as waves rolling across the meadow.
+ 
+ To repaint, select `Grass` in the editor (the *Grass Painter* plugin must be enabled):
+ 
+ | Input | Action |
+ | --- | --- |
+-| Left-mouse drag | Paint with the toolbar's mode (Density / Height / Erase), radius, strength and target |
++| Left-mouse drag | Paint with the toolbar's mode (Density / Height / Erase), radius, strength, target and falloff |
+ | Shift + left-mouse drag | Erase (a clearing) |
+ | `[` / `]` | Shrink / grow the brush radius |
+ | Ctrl+Z | Undo the last stroke (one stroke = one step) |
+ 
+-The mask is saved to its own `.res` at the end of every stroke. The starter meadow is written by
++The mask is saved to its own `.res` at the end of every stroke (save the scene before the first
++stroke). A duplicated field (Ctrl+D), or one pasted from another scene, gets its own copy of the
++mask on its first stroke, so it never overwrites the other's file. The starter meadow is written by
+ `tools/make_starter_grass.gd`. Costs and budgets: [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Moving
+ this into a game level: [docs/REUSE.md](docs/REUSE.md).
+ 
+ ## Procedural scattering
+ 
+ `Scatter/Trees` and `Scatter/Rocks` are `Scatter` layers. Each throws seeded candidate points over
+ a rectangle and keeps a point with a probability shaped by:
+ 
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/docs/REUSE.md docs/REUSE.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/docs/REUSE.md	2026-11-08 12:20:33.465364100 +0800
++++ docs/REUSE.md	2026-11-08 12:25:37.453887600 +0800
+@@ -2,46 +2,55 @@
+ 
+ Everything the playground adds on top of a plain level is optional. This is the short list of what a
+ game project needs from here.
+ 
+ ## What to copy
+ 
+ - `scripts/environment/`: `wind.gd`, `grass_field.gd`, `grass_brush.gd`, `kit_asset.gd`
+ - `assets/shaders/` (the wind include and grass shader live here) and `assets/materials/`
+-- The kit scenes in `scenes/environment/kit/` you actually place
++- The kit scenes in `scenes/environment/kit/` you actually place, and `assets/meshes/` (the `.glb`
++  files those kit scenes reference)
+ - `addons/grass_painter/` (the editor brush; the only plugin, and it paints grass masks and nothing else)
+ 
+ After copying, run `Godot --headless --path . --import` once so the new `class_name`s register.
+ 
+ ## Project settings
+ 
+-- **Shader globals** (Project Settings > Shader Globals), all three are required, because the
+-  materials read them:
++Copy these three sections of `project.godot` (or set the same values in Project Settings):
++
++- **`[shader_globals]`** (Project Settings > Shader Globals): all three wind globals are required,
++  because the materials read them:
+   - `wind_strength`, float, `0.6`
+   - `wind_direction`, vec2, `(0.8, -0.6)`
+-  - `wind_offset`, vec2, `(0, 0)`
+-- **Physics layer names:** layer 1 = `world`, layer 2 = `ground`.
+-- **Plugin:** Project Settings > Plugins > enable *Grass Painter*.
++  - `wind_phase`, float, `0.0`
++- **`[layer_names]`**: `3d_physics/layer_1="world"` and `3d_physics/layer_2="ground"`.
++- **`[editor_plugins]`**: `enabled=PackedStringArray("res://addons/grass_painter/plugin.cfg")`
++  (Project Settings > Plugins > enable *Grass Painter*).
+ 
+ ## The ground rule
+ 
+ Grass finds the ground with a ray against **layer 2 only**. Walkable ground therefore needs collision
+ on layers **1 + 2** (`collision_layer = 3`). Kit ground pieces (mounds) set `collision = true` so
+ they carry it. Anything not on layer 2 (boulders, props) gets no grass on top of it, and a spot with
+ no ground below gets no blade.
+ 
+ ## A new level in five steps
+ 
+-1. Add a `Wind` node (strength, and direction as a compass angle: 0 = toward -Z, 90 = toward +X).
++1. Add a `Wind` node. Set `strength` and `direction_degrees` (a compass angle the wind blows
++   toward: 0 = toward -Z, 90 = toward +X, clockwise from above).
+ 2. Add a `GrassField` node.
+-3. Set its `extent` (metres, centred on the node) to cover the area you want to paint.
+-4. Select the `GrassField`. The Grass Painter toolbar appears in the 3D editor.
+-5. Paint: LMB paints, Shift+LMB erases, `[` / `]` change the radius, Ctrl+Z undoes a stroke. Save the
+-   mask (it is stored in its own `.res`) with the scene.
++3. Set its `extent` (metres, centred on the node) to cover the area you want to paint. Settle
++   `extent` and `texel_size` before painting: changing either afterwards stretches the painted mask.
++4. Save the scene, then select the `GrassField`. The Grass Painter toolbar appears in the 3D editor.
++5. Paint: LMB paints, Shift+LMB erases, `[` / `]` change the radius, Ctrl+Z undoes a stroke. The
++   toolbar sets mode, radius, strength, target and falloff. The mask is only written once the
++   scene has a file, so save the scene before the first stroke; after that the plugin saves the
++   mask to `<scene>_grass.res` next to the scene after every stroke. A duplicated field gets its
++   own copy (`<scene>_grass_2.res`, ...) on its first stroke.
+ 
+ ## Playground-only parts
+ 
+ Not needed in a game level: the dev panel, presets, Compare, the debug tools (value probe, perf HUD,
+ light gizmos), the composition guides, and `tools/` (such as `make_starter_grass.gd`, which only
+ writes this playground's starter meadow).
+ 
+ Performance numbers for the grass are in [PERFORMANCE.md](PERFORMANCE.md).
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/assets/shaders/wind.gdshaderinc assets/shaders/wind.gdshaderinc
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/assets/shaders/wind.gdshaderinc	2026-11-08 12:20:33.506436600 +0800
++++ assets/shaders/wind.gdshaderinc	2026-11-08 12:23:52.662004200 +0800
+@@ -1,28 +1,33 @@
+ // Shared wind: the three globals published by scripts/environment/wind.gd, and the gust field
+ // every wind-driven shader samples, so trees and grass lean in the same patches.
+ global uniform float wind_strength;
+ global uniform vec2 wind_direction;
+-global uniform vec2 wind_offset;
++global uniform float wind_phase;  // metres the gusts have travelled downwind, wrapped at 2000
+ 
+ float wind_hash(vec2 p) {
+ 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+ }
+ 
+-float wind_value_noise(vec2 p) {
++// Value noise that repeats every `period` cells along x, so wrapping wind_phase is invisible.
++float wind_value_noise(vec2 p, float period) {
+ 	vec2 i = floor(p);
+ 	vec2 f = fract(p);
+ 	f = f * f * (3.0 - 2.0 * f);
+-	return mix(mix(wind_hash(i), wind_hash(i + vec2(1.0, 0.0)), f.x),
+-			mix(wind_hash(i + vec2(0.0, 1.0)), wind_hash(i + vec2(1.0, 1.0)), f.x), f.y);
++	float x0 = mod(i.x, period);
++	float x1 = mod(i.x + 1.0, period);
++	return mix(mix(wind_hash(vec2(x0, i.y)), wind_hash(vec2(x1, i.y)), f.x),
++			mix(wind_hash(vec2(x0, i.y + 1.0)), wind_hash(vec2(x1, i.y + 1.0)), f.x), f.y);
+ }
+ 
+ // Gust strength 0..1 at a world position: irregular patches (~20 m along the wind, ~40 m across
+-// it, so fronts run across the wind) that travel downwind as wind_offset grows.
++// it, so fronts run across the wind) that travel downwind as wind_phase grows. The scroll lives in
++// pattern space (not a world offset), so turning the wind only rotates the pattern about the
++// origin. q mirrors Wind.pattern_coord; the octave periods (100 and 230 cells) are the 2000 m
++// phase period in each octave's cells.
+ float wind_gust(vec2 world_xz) {
+-	vec2 p = world_xz - wind_offset;
+ 	vec2 along = wind_direction;
+ 	vec2 across = vec2(-along.y, along.x);
+-	vec2 q = vec2(dot(p, along) / 20.0, dot(p, across) / 40.0);
+-	float g = wind_value_noise(q) * 0.65 + wind_value_noise(q * 2.3 + vec2(7.3, 1.7)) * 0.35;
++	vec2 q = vec2((dot(world_xz, along) - wind_phase) / 20.0, dot(world_xz, across) / 40.0);
++	float g = wind_value_noise(q, 100.0) * 0.65 + wind_value_noise(q * 2.3 + vec2(7.3, 1.7), 230.0) * 0.35;
+ 	return clamp((g - 0.2) / 0.6, 0.0, 1.0);
+ }

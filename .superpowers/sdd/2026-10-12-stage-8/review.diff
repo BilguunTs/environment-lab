@@ -1,0 +1,1958 @@
+--- a/scripts/playground.gd
++++ b/scripts/playground.gd
+@@ -9,6 +9,15 @@
+ const SCREENSHOT_DIR := "res://screenshots"
+ const VALUE_MODES := ["Color", "Grayscale", "3-Value", "Notan"]
+ const FOREST_MODES := ["Manual", "Procedural"]
++## Debug views change how you look at the scene, not the scene: they're kept out of
++## PARAM_ORDER, so presets, Copy settings and A/B ignore them.
++const DEBUG_DRAWS := {
++	"Normal": Viewport.DEBUG_DRAW_DISABLED,
++	"Unshaded": Viewport.DEBUG_DRAW_UNSHADED,
++	"Lighting": Viewport.DEBUG_DRAW_LIGHTING,
++	"Overdraw": Viewport.DEBUG_DRAW_OVERDRAW,
++	"Wireframe": Viewport.DEBUG_DRAW_WIREFRAME,
++}
+ const GAMEPLAY := 0
+ const SCOUT := 1
+ const GAMEPLAY_INTENT := "Follow camera. Use Shift X/Y to put the player on a third instead of dead centre."
+@@ -48,6 +57,14 @@
+ var _mist_offset := Vector3.ZERO
+ var _forest_mode := "Manual"
+ var _show_zones := false
++## Where user presets are saved; tests point this at user://.
++var preset_path := Presets.USER_PATH
++var _typing := false  # a panel text field has focus: no hotkeys, no walking
++var compare: Compare
++var probe: ValueProbe
++var perf_hud: PerfHud
++var light_gizmos: LightGizmos
++var _overlay_restore := {}  # CanvasItem -> visible, while a capture hides the overlays
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+@@ -89,6 +106,23 @@
+ 	_wind = ProjectSettings.get_setting("shader_globals/wind_strength", {"value": 0.6})["value"]
+ 	set_param("wind", _wind)
+ 	_build_hud()
++	panel.add_to_group("overlay")
++	_hud.add_to_group("overlay")
++	compare = Compare.new()
++	compare.name = "Compare"
++	compare.pg = self
++	add_child(compare)
++	compare.changed.connect(_on_compare_changed)
++	compare.attach_view($UI, panel)
++	probe = ValueProbe.new()
++	probe.pg = self
++	$UI.add_child(probe)
++	perf_hud = PerfHud.new()
++	perf_hud.pg = self
++	$UI.add_child(perf_hud)
++	light_gizmos = LightGizmos.new()
++	light_gizmos.pg = self
++	add_child(light_gizmos)
+ 	_set_view(GAMEPLAY)
+ 	_default_state = get_state()
+ 	panel.setup(self)
+@@ -111,7 +145,12 @@
+ 
+ 
+ func _unhandled_input(event: InputEvent) -> void:
+-	if not (event is InputEventKey and event.pressed and not event.echo):
++	if _typing or not (event is InputEventKey) or event.echo:
++		return
++	if event.keycode == KEY_X:
++		compare.show_a(event.pressed)  # hold to see A
++		return
++	if not event.pressed:
+ 		return
+ 	match event.keycode:
+ 		KEY_F1:
+@@ -126,6 +165,13 @@
+ 			guides.cycle_grid()
+ 		KEY_V:
+ 			set_param("value_mode", VALUE_MODES[(VALUE_MODES.find(get_param("value_mode")) + 1) % VALUE_MODES.size()])
++		KEY_P:
++			compare.pin()
++		KEY_Z:
++			compare.toggle_split()
++		KEY_F2:
++			var modes := DEBUG_DRAWS.keys()
++			set_param("debug_draw", modes[(modes.find(get_param("debug_draw")) + 1) % modes.size()])
+ 		KEY_F12:
+ 			take_screenshot()
+ 		_:
+@@ -186,6 +232,10 @@
+ 		"tree_clumping": return tree_scatter.clumping
+ 		"rock_density": return rock_scatter.density
+ 		"show_zones": return _show_zones
++		"probe": return probe.visible
++		"perf_hud": return perf_hud.visible
++		"light_gizmos": return light_gizmos.visible
++		"debug_draw": return DEBUG_DRAWS.find_key(get_viewport().debug_draw)
+ 	push_error("Unknown param: %s" % key)
+ 	return null
+ 
+@@ -271,7 +321,13 @@
+ 			_show_zones = value
+ 			for zone in $Scatter/Zones.get_children():
+ 				zone.set_debug_visible(value)
++		"probe": probe.visible = value
++		"perf_hud": perf_hud.visible = value
++		"light_gizmos": light_gizmos.visible = value
++		"debug_draw": get_viewport().debug_draw = DEBUG_DRAWS.get(value, Viewport.DEBUG_DRAW_DISABLED)
+ 		_: push_error("Unknown param: %s" % key)
++	if key.begins_with("value_") and compare:
++		compare.request_recapture()  # the value view is baked into the frozen A image
+ 
+ 
+ func get_state() -> Dictionary:
+@@ -290,8 +346,12 @@
+ 
+ ## Presets are layered on top of the default state, so they are always reproducible.
+ func apply_preset(preset_name: String) -> void:
++	var presets := Presets.all(preset_path)
++	if not presets.has(preset_name):
++		panel.notify("No preset named %s" % preset_name)
++		return
+ 	_restore_fovs()
+-	var preset: Dictionary = Presets.ALL[preset_name]
++	var preset: Dictionary = presets[preset_name]
+ 	var state := _default_state.duplicate()
+ 	if preset.has("view") and not preset.has("cam_fov"):
+ 		state.erase("cam_fov")  # keep the viewpoint's authored lens, not the gameplay FOV
+@@ -300,6 +360,37 @@
+ 	panel.notify("Preset: %s" % preset_name)
+ 
+ 
++## Saves the current state as a user preset (overrides on top of the default). True on success.
++func save_preset(preset_name: String) -> bool:
++	var error := Presets.save_user(preset_name, get_state(), _default_state, preset_path)
++	if error != "":
++		panel.notify(error)
++		return false
++	panel.refresh_presets()
++	panel.notify("Saved preset: %s" % preset_name.strip_edges())
++	return true
++
++
++## While a panel text field has focus, keys type text instead of moving the player.
++func set_typing(on: bool) -> void:
++	_typing = on
++	player.input_enabled = not on and _view != SCOUT
++
++
++func in_scout() -> bool:
++	return _view == SCOUT
++
++
++func _on_compare_changed() -> void:
++	_update_hud()
++	panel.update_compare()
++
++
++func _notification(what: int) -> void:
++	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and compare:
++		compare.show_a(false)  # a held X never gets its key release once focus is gone
++
++
+ func reset_scene() -> void:
+ 	_restore_fovs()
+ 	player.global_transform = _player_start
+@@ -382,13 +473,15 @@
+ 
+ 
+ func _set_view(index: int) -> void:
++	if index == SCOUT and compare:
++		compare.leave()  # Scout has its own camera; A/B needs one fixed shot
+ 	if index == SCOUT and _view != SCOUT:
+ 		scout_cam.start_from(_cameras[_view])
+ 	if index != SCOUT:
+ 		_last_fixed_view = index
+ 	_view = index
+ 	_cameras[index].make_current()
+-	player.input_enabled = index != SCOUT
++	player.input_enabled = index != SCOUT and not _typing
+ 	if index == GAMEPLAY:
+ 		follow_cam.snap()
+ 	_update_hud()
+@@ -451,33 +544,51 @@
+ 		intent = SCOUT_INTENT
+ 	elif _view != GAMEPLAY:
+ 		intent = cam.get("intent") if cam is Viewpoint else ""  # pasted bookmarks are plain cameras
+-	_hud.text = "%s   %d°  ≈ %d mm\n%s" % [view_names()[_view].to_upper(), roundi(cam.fov), roundi(focal_length_mm(cam.fov)), intent]
++	var tag: String = compare.hud_tag() if compare else ""
++	_hud.text = "%s   %d°  ≈ %d mm%s\n%s" % [view_names()[_view].to_upper(), roundi(cam.fov), roundi(focal_length_mm(cam.fov)),
++		("   ·   " + tag) if tag != "" else "", intent]
+ 
+ 
+ # --- Screenshots --------------------------------------------------------------
+ 
+-## Saves the current frame without the panel/HUD (guides and value view stay, since
+-## they are part of the experiment). Returns the absolute file path.
++## Saves the current frame without the overlays (guides and value view stay, since they are
++## part of the experiment). Returns the absolute file path.
+ func take_screenshot(label := "shot") -> String:
+-	var panel_was_visible := panel.visible
+-	panel.visible = false
+-	_hud.visible = false
++	hide_overlays()
+ 	await get_tree().process_frame
+ 	await RenderingServer.frame_post_draw
+ 	var image := get_viewport().get_texture().get_image()
+-	panel.visible = panel_was_visible
+-	_hud.visible = true
++	restore_overlays()
++	var path := screenshot_path(label)
++	image.save_png(path)
++	panel.notify("Saved %s" % path.get_file())
++	print("Screenshot: ", path)
++	return path
++
+ 
++## Absolute path for a new capture in screenshots/ (created, and kept out of Godot's importer).
++func screenshot_path(label: String) -> String:
+ 	var dir := ProjectSettings.globalize_path(SCREENSHOT_DIR)
+ 	DirAccess.make_dir_recursive_absolute(dir)
+ 	if not FileAccess.file_exists(dir.path_join(".gdignore")):
+ 		FileAccess.open(dir.path_join(".gdignore"), FileAccess.WRITE)  # keep Godot from importing shots
+ 	var stamp := Time.get_datetime_string_from_system().replace(":", "-")
+-	var path := dir.path_join("%s_%s.png" % [stamp, label.to_snake_case()])
+-	image.save_png(path)
+-	panel.notify("Saved %s" % path.get_file())
+-	print("Screenshot: ", path)
+-	return path
++	return dir.path_join("%s_%s.png" % [stamp, label.to_snake_case()])
++
++
++## Hides everything in the "overlay" group (panel, HUD, compare view, probe, perf readout)
++## for a clean capture; restore_overlays() puts each back as it was.
++func hide_overlays() -> void:
++	for node in get_tree().get_nodes_in_group("overlay"):
++		_overlay_restore[node] = node.visible
++		node.visible = false
++
++
++func restore_overlays() -> void:
++	for node in _overlay_restore:
++		if is_instance_valid(node):
++			node.visible = _overlay_restore[node]
++	_overlay_restore.clear()
+ 
+ 
+ ## Renders every fixed view (not Scout) with the current settings, for side-by-side comparison.
+--- a/scripts/presets.gd
++++ b/scripts/presets.gd
+@@ -120,3 +120,68 @@
+ 		"hole_glow": 1.4,
+ 	},
+ }
++
++
++## Saved presets (plain text: edit by hand, delete a preset by deleting its section).
++## res:// is read-only in exported builds; this playground is never exported.
++const USER_PATH := "res://presets/user_presets.cfg"
++## Names become ConfigFile section headers, so keep them to safe characters.
++const NAME_PATTERN := "^[A-Za-z0-9 _\\-]+$"
++
++
++## Built-in presets followed by the saved ones (built-in names win).
++static func all(path := USER_PATH) -> Dictionary:
++	var result := ALL.duplicate()
++	var cfg := ConfigFile.new()
++	if cfg.load(path) != OK:
++		return result
++	for section in cfg.get_sections():
++		if result.has(section):
++			continue
++		var preset := {}
++		for key in cfg.get_section_keys(section):
++			preset[key] = cfg.get_value(section, key)
++		result[section] = preset
++	return result
++
++
++## The keys of `state` whose values differ from `base`, with the values from `state`.
++static func overrides(state: Dictionary, base: Dictionary) -> Dictionary:
++	var result := {}
++	for key in state:
++		if not base.has(key) or not same_value(state[key], base[key]):
++			result[key] = state[key]
++	return result
++
++
++static func same_value(a: Variant, b: Variant) -> bool:
++	if typeof(a) in [TYPE_FLOAT, TYPE_INT] and typeof(b) in [TYPE_FLOAT, TYPE_INT]:
++		return is_equal_approx(float(a), float(b))
++	if a is Color and b is Color:
++		return a.is_equal_approx(b)
++	return typeof(a) == typeof(b) and a == b
++
++
++## Saves `state` as overrides on top of `default_state` (plus the view, since a preset is also
++## a shot). Returns "" on success, otherwise a message for the panel's status line.
++static func save_user(preset_name: String, state: Dictionary, default_state: Dictionary, path := USER_PATH) -> String:
++	preset_name = preset_name.strip_edges()
++	if preset_name.is_empty():
++		return "Type a preset name first"
++	if RegEx.create_from_string(NAME_PATTERN).search(preset_name) == null:
++		return "Use letters, digits, spaces, - or _ in preset names"
++	if ALL.has(preset_name) or preset_name == "Reset":
++		return "Name taken by a built-in preset"
++	var cfg := ConfigFile.new()
++	var loaded := cfg.load(path)
++	if loaded != OK and loaded != ERR_FILE_NOT_FOUND:
++		return "Can't read %s (error %d): fix or delete it first" % [path, loaded]
++	if cfg.has_section(preset_name):
++		cfg.erase_section(preset_name)
++	var values := overrides(state, default_state)
++	values["view"] = state.get("view", "Gameplay")
++	for key in values:
++		cfg.set_value(preset_name, key, values[key])
++	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(path.get_base_dir()))
++	var err := cfg.save(path)
++	return "" if err == OK else "Could not write %s (error %d)" % [path, err]
+--- a/scripts/ui/dev_panel.gd
++++ b/scripts/ui/dev_panel.gd
+@@ -2,10 +2,12 @@
+ extends PanelContainer
+ ## Runtime experimentation panel (toggle with F1). Every control is bound to a
+ ## playground parameter key; `sync()` pulls values back after presets/resets.
+-## Controls never take keyboard focus, so WASD and hotkeys keep working.
++## Controls never take keyboard focus (so WASD and hotkeys keep working), except the preset
++## name field, which pauses them while you type.
+ 
+ const Presets := preload("res://scripts/presets.gd")
+ const ACCENT := Color(0.95, 0.68, 0.35)
++const DIFF_LINES := 8  # longer diffs end in "+N more"
+ 
+ var _pg: Node
+ var _controls := {}  # key -> Control
+@@ -13,6 +15,10 @@
+ var _root: VBoxContainer  # holds every section
+ var _box: VBoxContainer  # the section currently being filled
+ var _status: Label
++var _preset_grid: GridContainer
++var _preset_name: LineEdit
++var _diff_label: Label
++var _diff_timer := 0.0
+ 
+ 
+ func setup(playground: Node) -> void:
+@@ -89,13 +95,34 @@
+ 	_check("show_zones", "Show exclusion zones")
+ 	_note("Scatter sliders apply in Procedural mode. Same seed + same sliders = same forest. Zones, the path margin and hero items (gate trees, framing boulders, props) are always kept clear.")
+ 
++	_section("Compare", false)
++	var compare_row := HBoxContainer.new()
++	_box.add_child(compare_row)
++	compare_row.add_child(_button("Pin A (P)", _pg.compare.pin))
++	compare_row.add_child(_button("Split (Z)", _pg.compare.toggle_split))
++	compare_row.add_child(_button("Save pair", _pg.compare.save_pair))
++	_diff_label = Label.new()
++	_diff_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
++	_diff_label.add_theme_font_size_override("font_size", 11)
++	_box.add_child(_diff_label)
++	_note("Pin A, change something, then hold X to see A or press Z for a split screen (drag the divider). A and B share the camera, guides and value view. In split view A re-renders when the camera stops (a short blink).")
++
+ 	_section("Presets")
+-	var grid := GridContainer.new()
+-	grid.columns = 2
+-	_box.add_child(grid)
+-	for preset_name in Presets.ALL:
+-		grid.add_child(_button(preset_name, _pg.apply_preset.bind(preset_name)))
+-	grid.add_child(_button("Reset", _pg.reset_scene))
++	_preset_grid = GridContainer.new()
++	_preset_grid.columns = 2
++	_box.add_child(_preset_grid)
++	refresh_presets()
++	var save_row := HBoxContainer.new()
++	_box.add_child(save_row)
++	_preset_name = LineEdit.new()
++	_preset_name.placeholder_text = "Preset name"
++	_preset_name.size_flags_horizontal = SIZE_EXPAND_FILL
++	_preset_name.focus_entered.connect(_pg.set_typing.bind(true))
++	_preset_name.focus_exited.connect(_pg.set_typing.bind(false))
++	_preset_name.text_submitted.connect(func(_text: String) -> void: _save_preset())
++	save_row.add_child(_preset_name)
++	save_row.add_child(_button("Save preset", _save_preset))
++	_note("Saves what differs from the default (plus the view) to presets/user_presets.cfg. Same name overwrites; delete one by editing that file.")
+ 
+ 	_section("Capture", false)
+ 	var row := HBoxContainer.new()
+@@ -104,12 +131,22 @@
+ 	row.add_child(_button("All views", _pg.capture_all_views))
+ 	row.add_child(_button("Copy settings", _pg.copy_state_to_clipboard))
+ 
++	_section("Debug", false)
++	_option("debug_draw", "Render", PackedStringArray(_pg.DEBUG_DRAWS.keys()))
++	_check("probe", "Value probe (cursor value, p5/p50/p95, histogram)")
++	_check("perf_hud", "Perf readout (fps, CPU/GPU ms, draw calls)")
++	_check("light_gizmos", "Light gizmos (ranges, cones, sun direction)")
++	_note("Unshaded = palette and values without light; Lighting = light without palette. Overdraw shows where fog, particles and foliage stack up. Debug views are not part of presets or A/B.")
++
+ 	_box = _root
+ 	_status = Label.new()
+ 	_status.add_theme_color_override("font_color", ACCENT)
+ 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+ 	_box.add_child(_status)
+-	_note("WASD move · Shift sprint · RMB drag / Q E orbit · Wheel zoom\nC views · F scout · B bookmark · G grid · V values\nF12 screenshot · F1 panel")
++	_note("WASD move · Shift sprint · RMB drag / Q E orbit · Wheel zoom
++C views · F scout · B bookmark · G grid · V values
++P pin A · X hold A · Z split · F2 render mode
++F12 screenshot · F1 panel")
+ 
+ 	sync()
+ 
+@@ -136,6 +173,31 @@
+ 		_status.text = text
+ 
+ 
++## Lists what differs between A and B (the experiment log's "Changed" column).
++func update_compare() -> void:
++	if _diff_label == null:
++		return
++	var c: Compare = _pg.compare
++	if not c.has_a():
++		_diff_label.text = "Nothing pinned."
++		return
++	var lines := c.diff()
++	if lines.is_empty():
++		_diff_label.text = "A = B (nothing changed yet)"
++		return
++	var text := "\n".join(PackedStringArray(lines.slice(0, DIFF_LINES)))
++	if lines.size() > DIFF_LINES:
++		text += "\n+%d more" % (lines.size() - DIFF_LINES)
++	_diff_label.text = text
++
++
++func _process(delta: float) -> void:
++	_diff_timer += delta
++	if _diff_timer >= 0.25:  # sliders don't call sync(), so refresh the diff a few times a second
++		_diff_timer = 0.0
++		update_compare()
++
++
+ # --- Builders -----------------------------------------------------------------
+ 
+ func _build_frame() -> void:
+@@ -267,6 +329,36 @@
+ 	sync()
+ 
+ 
++## Rebuilds the preset buttons, e.g. after a save adds one.
++func refresh_presets() -> void:
++	for child in _preset_grid.get_children():
++		_preset_grid.remove_child(child)
++		child.queue_free()
++	for preset_name in Presets.all(_pg.preset_path):
++		_preset_grid.add_child(_button(preset_name, _pg.apply_preset.bind(preset_name)))
++	_preset_grid.add_child(_button("Reset", _pg.reset_scene))
++
++
++func preset_buttons() -> PackedStringArray:
++	var names := PackedStringArray()
++	for child in _preset_grid.get_children():
++		names.append(child.text)
++	return names
++
++
++func _save_preset() -> void:
++	if _pg.save_preset(_preset_name.text):
++		_preset_name.text = ""
++	_preset_name.release_focus()
++
++
++## A click anywhere outside the name field ends typing (Godot keeps focus otherwise).
++func _input(event: InputEvent) -> void:
++	if _preset_name and _preset_name.has_focus() and event is InputEventMouseButton and event.pressed \
++			and not _preset_name.get_global_rect().has_point(event.position):
++		_preset_name.release_focus()
++
++
+ func _button(text: String, action: Callable) -> Button:
+ 	var button := Button.new()
+ 	button.text = text
+--- a/project.godot
++++ b/project.godot
+@@ -15,6 +15,10 @@
+ run/main_scene="res://scenes/playground.tscn"
+ config/features=PackedStringArray("4.6", "Forward Plus")
+ 
++[autoload]
++
++DebugBoot="*res://scripts/debug/debug_boot.gd"
++
+ [display]
+ 
+ window/size/viewport_width=1600
+--- a/README.md
++++ b/README.md
+@@ -2,7 +2,7 @@
+ 
+ A small Godot 4 playground for practising stylized environment art and level design:
+ composition, silhouettes, depth, lighting and atmosphere. The brief and staged roadmap live in
+-[main.md](main.md). **Current stage: 7 (supernatural atmosphere).**
++[main.md](main.md). **Current stage: 8 (comparison, presets, visual debugging).**
+ 
+ ## Run
+ 
+@@ -34,6 +34,10 @@
+ | B | Bookmark the current shot as a new viewpoint |
+ | G | Cycle grid: off / thirds / golden / diagonals |
+ | V | Cycle value view: colour / grayscale / 3-value / notan |
++| P | Pin the current settings as A (compare) |
++| X (hold) | Show A; release for the live scene (B) |
++| Z | Split screen: frozen A image left, live B right; drag the divider |
++| F2 | Cycle render mode: normal / unshaded / lighting / overdraw / wireframe |
+ | F1 | Show / hide the dev panel |
+ | F12 | Screenshot (panel and HUD hidden; guides and value view kept) to `screenshots/` |
+ 
+@@ -51,8 +55,10 @@
+ - **Motion:** *Wind* drives tree and cloth sway, mist drift and mote drift; gusts roll across the forest. Floating motes around the player. The altar ember and the player's lantern always flicker.
+ - **Supernatural:** *Monolith awake* switches the whole effect on/off (off = the hole shows sky again). *Spirits* sets how many wisps flow from the hole down to the altar ember. *Hole glow* scales the glowing core, its halo and the cold spotlight from the hole together; they breathe on a slow 6 s cycle. The spotlight's shaft only shows while *Light shafts* is on.
+ - **Environment:** landmark and props visibility (hidden props still collide). *Forest* switches between **Manual** (the hand-placed forest) and **Procedural** (scatter layers). *Seed* / *New seed*, *Tree density*, *Tree spacing*, *Clumping*, *Rock density*. *Show exclusion zones* draws the scatter masks in the world. The status line reports tree and rock counts after each regeneration.
+-- **Presets:** Flat Overcast (the Stage 2 look, kept for before/after comparison), Wide Reveal, Low Silhouette, Golden Backlight, Foggy Forest, Ritual Clearing, Moonlit, Awakened (dusk; the Stage 7 money shot), and Reset (default state plus player back at spawn). Each preset stores only its overrides on top of the default "Cold Dawn" mood; edit them in `scripts/presets.gd`. A preset that switches to a fixed view keeps that view's authored lens.
++- **Presets:** Flat Overcast (the Stage 2 look, kept for before/after comparison), Wide Reveal, Low Silhouette, Golden Backlight, Foggy Forest, Ritual Clearing, Moonlit, Awakened (dusk; the Stage 7 money shot), and Reset (default state plus player back at spawn). Each preset stores only its overrides on top of the default "Cold Dawn" mood; edit them in `scripts/presets.gd`. A preset that switches to a fixed view keeps that view's authored lens. Type a name and press *Save preset* to keep the current settings: only what differs from the default (plus the view) goes into `presets/user_presets.cfg`. Saving with the same name overwrites; to delete a preset, edit that file. It lives under `res://`, so saving works when running from the project folder, never in an exported build.
+ - **Capture:** Screenshot, *All views* (one PNG per viewpoint, same lighting), and *Copy settings*, which copies the current state as text so you can paste it in as a new preset.
++- **Compare:** *Pin A* (P), *Split* (Z) and *Save pair*, plus a live list of what differs between A and the live scene (B). A and B share the camera, the guides and the value view; a lens is compared only in the view where A was pinned. In split view A is a frozen render that re-renders (a short blink) when the camera stops or the value view changes. *Save pair* writes `screenshots/<stamp>_compare_<view>.png`: A and B side by side with the diff underneath. It also copies an experiment-log row (Date and Changed filled in) to the clipboard.
++- **Debug:** *Render* mode, the *Value probe* (luminance under the cursor, frame p5/p50/p95 and a histogram with the notan *Value split* marked), the *Perf readout* (fps, CPU/GPU ms, draw calls, primitives) and *Light gizmos* (omni ranges, spot cones, sun direction, drawn through everything). None of these are part of presets, *Copy settings* or A/B. The probe reads the frame back from the GPU four times a second (about 15 ms each), so expect small hitches while it's on.
+ 
+ Colour roles are fixed on purpose:
+ - **Horizon = fog colour.** Distant forms dissolve into the sky behind them, which is what produces atmospheric perspective.
+@@ -94,7 +100,8 @@
+   player/player.tscn
+ scripts/
+   playground.gd              owns every tunable parameter (get_param/set_param), presets, screenshots
+-  presets.gd                 named presets (overrides only)
++  presets.gd                 named presets (overrides only) + saved user presets
++  compare.gd                 A/B compare: pin, hold-to-flip, split capture, saved pairs
+   player/player.gd           CharacterBody3D walker
+   camera/follow_camera.gd    gameplay orbit camera with lens shift
+   camera/viewpoint.gd        fixed cinematic camera + intent note
+@@ -108,6 +115,13 @@
+   procedural/exclusion_zone.gd @tool: circle / capsule / box keep-out area with soft edge
+   ui/dev_panel.gd            runtime panel, built in code
+   ui/composition_guides.gd   grids, centre marker, aspect masks
++  ui/compare_view.gd         split-screen overlay with a draggable divider
++  debug/debug_boot.gd        autoload: enables wireframes before any mesh loads
++  debug/value_probe.gd       cursor value, percentiles, histogram
++  debug/perf_hud.gd          fps, CPU/GPU ms, draw calls
++  debug/light_gizmos.gd      light ranges and cones drawn on top
++presets/user_presets.cfg     saved presets (created on first save; plain text)
++tests/                       run.gd (runner), case.gd (base), test_*.gd
+ assets/blender/              build_kit.py (procedural kit builder) + environment_kit.blend (git: source)
+ assets/meshes/               exported GLBs (generated by build_kit.py)
+ assets/materials/            flat_color.gdshader (faceted look, wind sway, tint variation) + palette
+@@ -185,3 +199,16 @@
+ (`light_halo.gdshader`): a halo is the air scattering the light, so depth fog must not erase it.
+ 
+ Stage 7 costs about 0.01 ms per frame (842 fps in the default gameplay view).
++
++## Tests
++
++```sh
++Godot --headless --path . --import                 # after adding a class_name
++Godot --path . -s res://tests/run.gd               # full suite (opens a window for image tests)
++Godot --headless --path . -s res://tests/run.gd    # logic only; image tests are skipped
++Godot --path . -s res://tests/run.gd -- --only=compare
++```
++
++Each `tests/test_*.gd` extends `tests/case.gd` and drives the real playground scene. Any engine or
++script error raised during a test fails it, unless the test declares it with `expect_error()`.
++Exit code 0 means everything passed.
+--- a/docs/EXPERIMENT_LOG.md
++++ b/docs/EXPERIMENT_LOG.md
+@@ -26,6 +26,19 @@
+ | 2026-10-12 | Does the hole read as light from far away? | hole emission 6 → 14 | Awakened, Long Lens | No visible change. The tonemapper flattens the core to a pale flat hexagon, so it reads as paint. Adding a soft halo that ignores depth fog made it read as a light source. Brightness alone doesn't say "light"; light spilling into the air around it does. |
+ | 2026-10-12 | Does the awake monolith fix the Stage 2 notan problem? | (measured, Cold Dawn) | default preset | Hole luminance 0.86 (Forest Gate) / 0.81 (Reveal) vs sky 0.60 and monolith body 0.51–0.58. The landmark now owns the brightest point in the frame, so it separates from the outcrop without changing the fog or sun. |
+ 
++## Stage 8 experiments to run
++
++1. **Redo Stage 7 #1 as a pair.** In Forest Gate, pin A with *Monolith awake* on, switch it off, then *Save pair*. Paste
++   the copied row into the table above and write the Question and Result. Did seeing them side by side change your answer?
++2. **Palette or light?** Pick the view you like least. Look at it in *Unshaded*, then *Lighting*. Which one is the problem?
++   Fix only that one, then compare against the original with X.
++3. **Read the histogram.** Turn on the value probe in Reveal. Where is the big hump, and how much of the frame sits on
++   each side of the *Value split* line? Move the split until the landmark is on the light side alone.
++4. **What does the fog cost?** With the perf readout on, toggle *Light shafts* and *Drifting mist*. Write down the GPU ms
++   each one costs. Is either one worth what it costs in the views where you can barely see it?
++5. **Light as level design, measured.** Turn on light gizmos and walk the path. Does every bend have a light (sun pool,
++   ember or lantern) reaching it? Note the bend that has none.
++
+ ## Stage 7 experiments to run
+ 
+ 1. **With and without.** In Reveal, Forest Gate and Clearing, F12 with *Monolith awake* on, then off. Write one sentence
+--- /dev/null
++++ b/scripts/compare.gd
+@@ -0,0 +1,284 @@
++class_name Compare
++extends Node
++## A/B comparison from one camera. A is a pinned state; B is always the live scene.
++## P pins A, hold X to see A, Z splits the screen (frozen A image | live B). Talks to the scene
++## only through the playground's get_state / apply_state interface, so every parameter is
++## comparable for free.
++
++signal changed  # pinned, flipped, split toggled or A re-captured: HUD and panel refresh
++
++const Presets := preload("res://scripts/presets.gd")
++## Not compared: A and B are seen from the same camera, guides and value view.
++const EXCLUDE := ["view", "guides_grid", "guides_center", "guides_aspect", "value_mode", "value_squint", "value_split"]
++const SETTLE_FRAMES := 10  # volumetric fog and shadows need a few frames to catch up
++const RECAPTURE_DELAY := 0.5  # s the camera must be still before A re-renders in split view
++const STRIP_LINE := 20  # px per text line under a saved pair
++
++var pg: Node  # the playground
++var a_state := {}  # empty = nothing pinned
++var _a_view := ""  # the view A was pinned in: its cam_fov only means something there
++var showing_a := false
++var _b_state := {}  # the live state while A is shown
++var split := false
++var a_image: Image  # A rendered from the current camera (split view)
++var busy := false  # a capture is running: flips and new captures wait
++var view: CompareView
++var _dirty := false
++var _still := 0.0
++var _last_cam := Transform3D()
++var _last_fov := 0.0
++
++
++func has_a() -> bool:
++	return not a_state.is_empty()
++
++
++func compare_state() -> Dictionary:
++	var state: Dictionary = pg.get_state()
++	for key in EXCLUDE:
++		state.erase(key)
++	return state
++
++
++## Why A/B can't run right now, or "" if it can.
++func blocked_reason(needs_a := true) -> String:
++	if pg.in_scout():
++		return "Leave Scout first (F)"
++	if needs_a and not has_a():
++		return "Pin A first (P)"
++	return ""
++
++
++func pin() -> void:
++	var reason := blocked_reason(false)
++	if reason != "":
++		pg.panel.notify(reason)
++		return
++	show_a(false)
++	a_state = compare_state()
++	_a_view = pg.get_param("view")
++	pg.panel.notify("A pinned: change something, then hold X to compare")
++	changed.emit()
++
++
++func clear() -> void:
++	leave()
++	a_state = {}
++	changed.emit()
++
++
++## Back to plain B, e.g. before Scout takes over the camera.
++func leave() -> void:
++	show_a(false)
++	if split:
++		split = false
++		changed.emit()
++
++
++## Hold-to-flip: true shows A, false returns to the live state B.
++func show_a(on: bool) -> void:
++	if busy:
++		return
++	if on == showing_a:
++		return
++	if on:
++		var reason := blocked_reason()
++		if reason != "":
++			pg.panel.notify(reason)
++			return
++		_b_state = compare_state()
++		pg.apply_state(_a_here())
++	else:
++		pg.apply_state(_b_state)
++	showing_a = on
++	changed.emit()
++
++
++## "key: a → b" for every compared parameter that differs between A and B, in panel order.
++func diff() -> Array[String]:
++	if not has_a():
++		return []
++	return diff_between(_a_here(), _b_state if showing_a else compare_state())
++
++
++## A as it applies to the current view. cam_fov is the *active* camera's lens, so after a view
++## change A's lens belongs to another camera and must not be pushed onto this one.
++func _a_here() -> Dictionary:
++	var a := a_state.duplicate()
++	if pg.get_param("view") != _a_view:
++		a.erase("cam_fov")
++	return a
++
++
++static func diff_between(a: Dictionary, b: Dictionary) -> Array[String]:
++	var lines: Array[String] = []
++	for key in a:
++		if b.has(key) and not Presets.same_value(a[key], b[key]):
++			lines.append("%s: %s → %s" % [key, fmt(a[key]), fmt(b[key])])
++	return lines
++
++
++## Short, log-friendly value text: 3 significant digits, colours as hex, booleans as on/off.
++static func fmt(value: Variant) -> String:
++	match typeof(value):
++		TYPE_BOOL:
++			return "on" if value else "off"
++		TYPE_COLOR:
++			return "#" + value.to_html(false)
++		TYPE_FLOAT, TYPE_INT:
++			var v := float(value)
++			if v == roundf(v):
++				return str(int(v))
++			var decimals := clampi(2 - floori(log(absf(v)) / log(10.0)), 0, 6)
++			return String.num(v, decimals)
++	return str(value)
++
++
++func hud_tag() -> String:
++	if not has_a():
++		return ""
++	if showing_a:
++		return "SHOWING A"  # X held: the split overlay steps aside, so say what's on screen
++	if split:
++		return "SPLIT  A | B"
++	return "B · A pinned"
++
++
++func attach_view(ui: CanvasLayer, below: Control) -> void:
++	view = CompareView.new()
++	view.compare = self
++	ui.add_child(view)
++	ui.move_child(view, below.get_index())  # under the dev panel, over the 3D view and value view
++
++
++func toggle_split() -> void:
++	if busy:
++		return
++	if not split:
++		var reason := blocked_reason()
++		if reason != "":
++			pg.panel.notify(reason)
++			return
++	show_a(false)
++	split = not split
++	changed.emit()
++	if split:
++		await capture_a()
++
++
++## Renders `state` from the current camera with the overlays hidden and returns the frame.
++## Leaves `state` applied: callers restore what they need.
++func render_state(state: Dictionary) -> Image:
++	pg.hide_overlays()
++	pg.apply_state(state)
++	for i in SETTLE_FRAMES:
++		await get_tree().process_frame
++	await RenderingServer.frame_post_draw
++	var image := get_viewport().get_texture().get_image()
++	pg.restore_overlays()
++	return image
++
++
++## Re-renders the frozen A image for split view. Costs a SETTLE_FRAMES blink.
++func capture_a() -> void:
++	if busy or not has_a():
++		return
++	busy = true
++	var b := compare_state()
++	a_image = await render_state(_a_here())
++	pg.apply_state(b)
++	var cam := get_viewport().get_camera_3d()
++	if cam:
++		_last_cam = cam.global_transform
++		_last_fov = cam.fov
++	_dirty = false
++	busy = false
++	changed.emit()
++
++
++## Re-render A as soon as possible (e.g. the value view changed and is baked into A).
++func request_recapture() -> void:
++	if split:
++		_dirty = true
++		_still = RECAPTURE_DELAY
++
++
++func _process(delta: float) -> void:
++	if not split or busy:
++		return
++	var cam := get_viewport().get_camera_3d()
++	if cam == null:
++		return
++	if not cam.global_transform.is_equal_approx(_last_cam) or not is_equal_approx(cam.fov, _last_fov):
++		_last_cam = cam.global_transform
++		_last_fov = cam.fov
++		_still = 0.0
++		_dirty = true
++	elif _dirty:
++		_still += delta
++		if _still >= RECAPTURE_DELAY:
++			capture_a()
++
++
++## Renders A and B properly (not cropped from the split view), saves them side by side with
++## the diff underneath, and copies a ready experiment-log row. Returns the PNG path or "".
++func save_pair() -> String:
++	var reason := blocked_reason()
++	if reason != "" or busy:
++		pg.panel.notify(reason if reason != "" else "Still capturing, try again")
++		return ""
++	show_a(false)
++	busy = true
++	var b := compare_state()
++	var a := _a_here()
++	var lines := diff_between(a, b)
++	var image_a := await render_state(a)
++	var image_b := await render_state(b)
++	busy = false
++	var view_name: String = pg.get_param("view")
++	var header := "%s · %s · A (left) vs B (right)" % [Time.get_datetime_string_from_system(false, true), view_name]
++	var sheet := await compose(image_a, image_b, header, lines)
++	var path: String = pg.screenshot_path("compare_" + view_name)
++	sheet.save_png(path)
++	DisplayServer.clipboard_set(log_row(lines))
++	pg.panel.notify("Saved %s (log row copied)" % path.get_file())
++	changed.emit()
++	return path
++
++
++## An EXPERIMENT_LOG.md row with Date and Changed filled in; Question, Fixed and Result are yours.
++static func log_row(lines: Array[String]) -> String:
++	var changed_text := ", ".join(PackedStringArray(lines)) if not lines.is_empty() else "(nothing)"
++	return "| %s | | %s | | |" % [Time.get_date_string_from_system(), changed_text]
++
++
++## Two frames side by side with a text strip below. Godot's Image can't draw text, so this lays
++## the pieces out in a temporary 2D SubViewport and grabs its frame.
++func compose(left: Image, right: Image, header: String, lines: Array[String]) -> Image:
++	var w := left.get_width()
++	var h := left.get_height()
++	var sub := SubViewport.new()
++	sub.size = Vector2i(w * 2, h + STRIP_LINE * (maxi(lines.size(), 1) + 2))
++	sub.disable_3d = true
++	sub.render_target_update_mode = SubViewport.UPDATE_ONCE
++	var background := ColorRect.new()
++	background.color = Color(0.05, 0.055, 0.06)
++	background.size = Vector2(sub.size)
++	sub.add_child(background)
++	for i in 2:
++		var rect := TextureRect.new()
++		rect.texture = ImageTexture.create_from_image(left if i == 0 else right)
++		rect.position = Vector2(w * i, 0)
++		rect.size = Vector2(w, h)
++		sub.add_child(rect)
++	var label := Label.new()
++	label.position = Vector2(12, h + 6)
++	label.add_theme_font_size_override("font_size", 14)
++	label.text = header + "\n" + ("\n".join(PackedStringArray(lines)) if not lines.is_empty() else "No differences: A = B")
++	sub.add_child(label)
++	add_child(sub)
++	await RenderingServer.frame_post_draw
++	await RenderingServer.frame_post_draw
++	var image := sub.get_texture().get_image()
++	sub.queue_free()
++	return image
+--- /dev/null
++++ b/scripts/ui/compare_view.gd
+@@ -0,0 +1,61 @@
++class_name CompareView
++extends Control
++## Split-screen overlay: the frozen A image left of a draggable divider, the live scene (B)
++## to the right. Drag the divider with the left mouse button. Stays visible and simply draws
++## nothing when inactive, so the overlay group can hide/restore it during captures.
++
++const HANDLE := 12.0  # px either side of the divider that grab it
++const LINE := Color(1, 1, 1, 0.8)
++const OUTLINE := Color(0, 0, 0, 0.8)
++
++var compare: Compare
++var divider := 0.5  # fraction of the width
++var _image: Image  # the image _texture was made from
++var _texture: ImageTexture
++var _dragging := false
++
++
++func _ready() -> void:
++	set_anchors_and_offsets_preset(PRESET_FULL_RECT)
++	mouse_filter = MOUSE_FILTER_PASS  # unhandled clicks still reach the camera (RMB orbit)
++	add_to_group("overlay")
++
++
++func active() -> bool:
++	return compare.split and not compare.showing_a and compare.a_image != null
++
++
++func _process(_delta: float) -> void:
++	if compare.a_image != _image:
++		_image = compare.a_image
++		_texture = ImageTexture.create_from_image(_image) if _image else null
++	queue_redraw()
++
++
++func _draw() -> void:
++	if not active() or _texture == null:
++		return
++	var x := size.x * divider
++	var source := Vector2(_texture.get_width() * divider, _texture.get_height())
++	draw_texture_rect_region(_texture, Rect2(Vector2.ZERO, Vector2(x, size.y)), Rect2(Vector2.ZERO, source))
++	draw_line(Vector2(x, 0), Vector2(x, size.y), LINE, 2.0)
++	draw_rect(Rect2(x - 4, size.y * 0.5 - 24, 8, 48), LINE)
++	var font := get_theme_default_font()
++	for label in [["A", x - 30.0], ["B", x + 14.0]]:
++		draw_string_outline(font, Vector2(label[1], 30), label[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 20, 4, OUTLINE)
++		draw_string(font, Vector2(label[1], 30), label[0], HORIZONTAL_ALIGNMENT_LEFT, -1, 20, LINE)
++
++
++func _gui_input(event: InputEvent) -> void:
++	if not active():
++		return
++	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
++		if event.pressed and absf(event.position.x - size.x * divider) <= HANDLE:
++			_dragging = true
++			accept_event()
++		elif not event.pressed and _dragging:
++			_dragging = false
++			accept_event()
++	elif event is InputEventMouseMotion and _dragging:
++		divider = clampf(event.position.x / size.x, 0.02, 0.98)
++		accept_event()
+--- /dev/null
++++ b/scripts/debug/debug_boot.gd
+@@ -0,0 +1,7 @@
++extends Node
++## Autoload. Wireframe debug draw only works for meshes created after this flag is set, so it
++## has to run before the main scene loads.
++
++
++func _init() -> void:
++	RenderingServer.set_debug_generate_wireframes(true)
+--- /dev/null
++++ b/scripts/debug/light_gizmos.gd
+@@ -0,0 +1,107 @@
++class_name LightGizmos
++extends MeshInstance3D
++## Draws every visible omni light's range, every spot light's cone and the sun's direction on
++## top of everything (no depth test), so light coverage reads through the trees. Rebuilt each
++## frame because the lantern moves with the player. Vertices are in world space: keep this node
++## at the playground's origin.
++
++const SEGMENTS := 32
++const SUN_ARROW := 3.0  # m
++
++var pg: Node
++var _lights: Array[Light3D] = []
++var _mesh := ImmediateMesh.new()
++
++
++## Line-segment pairs for a circle of `radius` around `center` in the plane of axes a and b.
++static func circle(center: Vector3, a: Vector3, b: Vector3, radius: float, segments := SEGMENTS) -> PackedVector3Array:
++	var out := PackedVector3Array()
++	for i in segments:
++		var t0 := TAU * i / segments
++		var t1 := TAU * (i + 1) / segments
++		out.append(center + (a * cos(t0) + b * sin(t0)) * radius)
++		out.append(center + (a * cos(t1) + b * sin(t1)) * radius)
++	return out
++
++
++## A spot light's reach: a rim whose points are all `reach` from the apex, plus edges to it,
++## so the outline shows the true range at the cone's edge.
++static func cone(xf: Transform3D, reach: float, angle_deg: float, edges := 8) -> PackedVector3Array:
++	var angle := deg_to_rad(angle_deg)
++	var forward := -xf.basis.z.normalized()
++	var right := xf.basis.x.normalized()
++	var up := xf.basis.y.normalized()
++	var rim_center := xf.origin + forward * reach * cos(angle)
++	var rim_radius := reach * sin(angle)
++	var out := circle(rim_center, right, up, rim_radius)
++	for i in edges:
++		var t := TAU * i / edges
++		out.append(xf.origin)
++		out.append(rim_center + (right * cos(t) + up * sin(t)) * rim_radius)
++	return out
++
++
++static func arrow(from: Vector3, direction: Vector3, length: float) -> PackedVector3Array:
++	var d := direction.normalized()
++	var tip := from + d * length
++	var side := d.cross(Vector3.UP)
++	if side.length_squared() < 0.001:
++		side = Vector3.RIGHT
++	side = side.normalized()
++	return PackedVector3Array([from, tip, tip, tip - d * 0.6 + side * 0.3, tip, tip - d * 0.6 - side * 0.3])
++
++
++func _ready() -> void:
++	mesh = _mesh
++	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
++	var material := StandardMaterial3D.new()
++	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
++	material.vertex_color_use_as_albedo = true
++	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA  # drawn after opaque geometry
++	material.no_depth_test = true
++	material_override = material
++	visible = false
++	visibility_changed.connect(_on_visibility_changed)
++
++
++func _on_visibility_changed() -> void:
++	if visible:
++		_lights.assign(pg.find_children("*", "Light3D", true, false))
++	_rebuild()
++
++
++func _process(_delta: float) -> void:
++	if visible:
++		_rebuild()
++
++
++func _rebuild() -> void:
++	_mesh.clear_surfaces()
++	if not visible:
++		return
++	var points := PackedVector3Array()
++	var colors := PackedColorArray()
++	for light in _lights:
++		if not is_instance_valid(light) or not light.is_visible_in_tree():
++			continue
++		var xf := light.global_transform
++		var segment := PackedVector3Array()
++		if light is OmniLight3D:
++			var r: float = light.omni_range
++			segment.append_array(circle(xf.origin, Vector3.RIGHT, Vector3.FORWARD, r))
++			segment.append_array(circle(xf.origin, Vector3.RIGHT, Vector3.UP, r))
++			segment.append_array(circle(xf.origin, Vector3.FORWARD, Vector3.UP, r))
++		elif light is SpotLight3D:
++			segment = cone(xf, light.spot_range, light.spot_angle)
++		elif light is DirectionalLight3D:
++			segment = arrow(pg.player.global_position + Vector3.UP * 2.5, -xf.basis.z, SUN_ARROW)
++		points.append_array(segment)
++		for i in segment.size():
++			colors.append(light.light_color)
++	if points.is_empty():
++		return
++	_mesh.surface_begin(Mesh.PRIMITIVE_LINES)
++	for i in points.size():
++		_mesh.surface_set_color(colors[i])
++		_mesh.surface_add_vertex(points[i])
++	_mesh.surface_end()
+--- /dev/null
++++ b/scripts/debug/perf_hud.gd
+@@ -0,0 +1,73 @@
++class_name PerfHud
++extends Label
++## Live cost readout (top right, under the view HUD): fps, CPU and GPU frame time, draw calls
++## and primitives, averaged over INTERVAL. At 800+ fps, milliseconds are the honest unit.
++
++const INTERVAL := 0.5
++
++var pg: Node
++var _timer := 0.0
++var _frames := 0
++var _cpu := 0.0
++var _gpu := 0.0
++
++
++static func format(fps: float, cpu_ms: float, gpu_ms: float, draw_calls: int, primitives: int, probe_on: bool) -> String:
++	var text := "%d fps   CPU %.2f ms   GPU %.2f ms\n%d draws   %s prims" % [roundi(fps), cpu_ms, gpu_ms, draw_calls, _short(primitives)]
++	if probe_on:
++		text += "\nprobe on: its readback adds a few ms every 0.25 s"
++	return text
++
++
++static func _short(n: int) -> String:
++	if n >= 1_000_000:
++		return "%.1fM" % (n / 1_000_000.0)
++	if n >= 1000:
++		return "%dk" % roundi(n / 1000.0)
++	return str(n)
++
++
++func _ready() -> void:
++	add_to_group("overlay")
++	mouse_filter = MOUSE_FILTER_IGNORE
++	set_anchors_and_offsets_preset(PRESET_TOP_RIGHT)
++	grow_horizontal = GROW_DIRECTION_BEGIN
++	offset_left = -440
++	offset_right = -16
++	offset_top = 64  # under the two-line view HUD
++	horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
++	add_theme_font_size_override("font_size", 12)
++	add_theme_color_override("font_color", Color(0.75, 1.0, 0.75, 0.9))
++	add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
++	add_theme_constant_override("outline_size", 4)
++	visible = false
++	visibility_changed.connect(_on_visibility_changed)
++
++
++func _on_visibility_changed() -> void:
++	RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), visible)
++	_reset()
++
++
++func _reset() -> void:
++	_timer = 0.0
++	_frames = 0
++	_cpu = 0.0
++	_gpu = 0.0
++
++
++func _process(delta: float) -> void:
++	if not visible:
++		return
++	var rid := get_viewport().get_viewport_rid()
++	# Work only: TIME_PROCESS would be the whole frame, vsync wait included.
++	_cpu += RenderingServer.viewport_get_measured_render_time_cpu(rid) + RenderingServer.get_frame_setup_time_cpu()
++	_gpu += RenderingServer.viewport_get_measured_render_time_gpu(rid)
++	_frames += 1
++	_timer += delta
++	if _timer < INTERVAL:
++		return
++	text = format(Performance.get_monitor(Performance.TIME_FPS), _cpu / _frames, _gpu / _frames,
++		int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
++		int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)), pg.get_param("probe"))
++	_reset()
+--- /dev/null
++++ b/scripts/debug/value_probe.gd
+@@ -0,0 +1,117 @@
++class_name ValueProbe
++extends Control
++## Live value readout: luminance under the cursor, frame p5/p50/p95 and a histogram with the
++## notan split marked. Measures the final tonemapped frame (what you see, value view included)
++## with the same Rec.709 weights as the experiment log. Off by default: every sample reads the
++## frame back from the GPU, which costs a few ms.
++
++const SAMPLE_INTERVAL := 0.25
++const BINS := 32
++const DOWNSAMPLE := 8
++const BOX := Vector2(260, 132)
++const SPLIT_COLOR := Color(0.95, 0.68, 0.35)
++
++var pg: Node
++var cursor_value := -1.0  # -1 = cursor outside the window
++var stats := {}
++var _timer := 0.0
++
++
++static func luminance(c: Color) -> float:
++	return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
++
++
++## Percentiles and histogram of `image`, skipping pixels inside `exclude` (image pixel space).
++static func measure(image: Image, exclude: Array[Rect2] = []) -> Dictionary:
++	var hist := PackedInt32Array()
++	hist.resize(BINS)
++	var values := PackedFloat32Array()
++	for y in image.get_height():
++		for x in image.get_width():
++			var p := Vector2(x + 0.5, y + 0.5)
++			var skip := false
++			for r in exclude:
++				if r.has_point(p):
++					skip = true
++					break
++			if skip:
++				continue
++			var v := clampf(luminance(image.get_pixel(x, y)), 0.0, 1.0)
++			values.append(v)
++			hist[mini(int(v * BINS), BINS - 1)] += 1
++	if values.is_empty():
++		return {"p5": 0.0, "p50": 0.0, "p95": 0.0, "hist": hist}
++	values.sort()
++	var n := values.size()
++	return {
++		"p5": values[mini(int(0.05 * n), n - 1)],
++		"p50": values[mini(int(0.5 * n), n - 1)],
++		"p95": values[mini(int(0.95 * n), n - 1)],
++		"hist": hist,
++	}
++
++
++func _ready() -> void:
++	add_to_group("overlay")
++	mouse_filter = MOUSE_FILTER_IGNORE
++	set_anchors_and_offsets_preset(PRESET_BOTTOM_RIGHT)
++	offset_left = -BOX.x - 16
++	offset_top = -BOX.y - 16
++	offset_right = -16
++	offset_bottom = -16
++	visible = false
++
++
++func _process(delta: float) -> void:
++	if not visible:
++		return
++	_timer += delta
++	if _timer < SAMPLE_INTERVAL:
++		return
++	_timer = 0.0
++	sample()
++	queue_redraw()
++
++
++func sample() -> void:
++	var frame := get_viewport().get_texture().get_image()
++	if frame == null or frame.is_empty():
++		return
++	var mouse := get_viewport().get_mouse_position()
++	var full := Rect2(Vector2.ZERO, Vector2(frame.get_size()))
++	cursor_value = luminance(frame.get_pixelv(Vector2i(mouse))) if full.has_point(mouse) else -1.0
++	frame.resize(frame.get_width() / DOWNSAMPLE, frame.get_height() / DOWNSAMPLE, Image.INTERPOLATE_BILINEAR)
++	# Skip the panel, HUD and this box; full-screen overlays (split view) are part of the picture.
++	var exclude: Array[Rect2] = []
++	for node in get_tree().get_nodes_in_group("overlay"):
++		if node is Control and node.is_visible_in_tree():
++			var r: Rect2 = node.get_global_rect()
++			if r.get_area() < full.get_area() * 0.5:
++				exclude.append(Rect2(r.position / DOWNSAMPLE, r.size / DOWNSAMPLE))
++	stats = measure(frame, exclude)
++
++
++func _draw() -> void:
++	draw_rect(Rect2(Vector2.ZERO, BOX), Color(0.05, 0.055, 0.06, 0.86))
++	if stats.is_empty():
++		return
++	var plot := Rect2(10, 10, BOX.x - 20, 70)
++	var hist: PackedInt32Array = stats["hist"]
++	var peak := 1
++	for count in hist:
++		peak = maxi(peak, count)
++	var bar := plot.size.x / BINS
++	for i in BINS:
++		var h := plot.size.y * hist[i] / float(peak)
++		var shade := 0.25 + 0.75 * (i + 0.5) / BINS
++		draw_rect(Rect2(plot.position.x + i * bar, plot.end.y - h, bar - 1.0, h), Color(shade, shade, shade))
++	for q in ["p5", "p50", "p95"]:
++		var qx: float = plot.position.x + plot.size.x * float(stats[q])
++		draw_line(Vector2(qx, plot.position.y), Vector2(qx, plot.end.y), Color(1, 1, 1, 0.6), 1.0)
++	var split: float = pg.get_param("value_split")
++	var sx := plot.position.x + plot.size.x * split
++	draw_line(Vector2(sx, plot.position.y - 4), Vector2(sx, plot.end.y + 4), SPLIT_COLOR, 2.0)
++	var font := get_theme_default_font()
++	var cursor := "—" if cursor_value < 0.0 else "%.2f" % cursor_value
++	draw_string(font, Vector2(10, 100), "cursor %s   split %.2f" % [cursor, split], HORIZONTAL_ALIGNMENT_LEFT, -1, 13)
++	draw_string(font, Vector2(10, 120), "p5 %.2f   p50 %.2f   p95 %.2f" % [stats["p5"], stats["p50"], stats["p95"]], HORIZONTAL_ALIGNMENT_LEFT, -1, 13)
+--- /dev/null
++++ b/tests/case.gd
+@@ -0,0 +1,48 @@
++extends RefCounted
++## Base for test files. tests/test_*.gd extend this and define `test_*` methods taking the
++## playground; methods may await. A failed check records a message and the test carries on.
++
++var tree: SceneTree
++var failures: Array[String] = []
++var skipped := ""
++var expected_errors: Array[String] = []  # engine errors this test provokes on purpose
++
++
++## Declares that the test deliberately triggers an engine error containing `fragment`.
++func expect_error(fragment: String) -> void:
++	expected_errors.append(fragment)
++
++
++func check(condition: bool, message: String) -> void:
++	if not condition:
++		failures.append(message)
++
++
++func check_eq(actual: Variant, expected: Variant, message: String) -> void:
++	var numeric := typeof(actual) in [TYPE_INT, TYPE_FLOAT] and typeof(expected) in [TYPE_INT, TYPE_FLOAT]
++	var same: bool = float(actual) == float(expected) if numeric else (typeof(actual) == typeof(expected) and actual == expected)
++	if not same:
++		failures.append("%s: expected %s, got %s" % [message, var_to_str(expected), var_to_str(actual)])
++
++
++func check_near(actual: float, expected: float, tolerance: float, message: String) -> void:
++	if absf(actual - expected) > tolerance:
++		failures.append("%s: expected %.3f ± %.3f, got %.3f" % [message, expected, tolerance, actual])
++
++
++func frames(count: int) -> void:
++	for i in count:
++		await tree.process_frame
++
++
++func seconds(duration: float) -> void:
++	await tree.create_timer(duration).timeout
++
++
++## Image tests need a real renderer: the headless display server draws nothing.
++## Usage: `if not needs_window(): return`
++func needs_window() -> bool:
++	if DisplayServer.get_name() == "headless":
++		skipped = "needs a window (run without --headless)"
++		return false
++	return true
+--- /dev/null
++++ b/tests/run.gd
+@@ -0,0 +1,91 @@
++extends SceneTree
++## Runs every tests/test_*.gd against a live playground scene.
++##   Godot --path . -s res://tests/run.gd                  all tests (opens a window)
++##   Godot --headless --path . -s res://tests/run.gd       logic only; image tests are skipped
++##   Godot --path . -s res://tests/run.gd -- --only=name   files whose name contains "name"
++## Exit code 0 = everything passed.
++
++const TEST_DIR := "res://tests"
++
++
++## Collects engine and script errors: a runtime error aborts a test function silently, so
++## without this a crashed test would still report PASS.
++class ErrorCatcher extends Logger:
++	var errors: Array[String] = []
++	var _mutex := Mutex.new()
++
++	func _log_error(function: String, file: String, line: int, code: String, rationale: String,
++			_editor_notify: bool, _error_type: int, _script_backtraces: Array[ScriptBacktrace]) -> void:
++		_mutex.lock()
++		errors.append("%s (%s:%d %s)" % [rationale if rationale != "" else code, file.get_file(), line, function])
++		_mutex.unlock()
++
++	func take() -> Array[String]:
++		_mutex.lock()
++		var out := errors.duplicate()
++		errors.clear()
++		_mutex.unlock()
++		return out
++
++
++func _initialize() -> void:
++	_run.call_deferred()
++
++
++func _run() -> void:
++	var only := ""
++	for arg in OS.get_cmdline_user_args():
++		if arg.begins_with("--only="):
++			only = arg.trim_prefix("--only=")
++	var catcher := ErrorCatcher.new()
++	OS.add_logger(catcher)
++	var pg: Node = load("res://scenes/playground.tscn").instantiate()
++	root.add_child(pg)
++	for i in 30:  # let shadows, SSAO and the forest settle
++		await process_frame
++	var passed := 0
++	var failed := 0
++	var skipped := 0
++	var files := Array(DirAccess.get_files_at(TEST_DIR))
++	files.sort()
++	for file: String in files:
++		if not (file.begins_with("test_") and file.ends_with(".gd")):
++			continue
++		if only != "" and not file.contains(only):
++			continue
++		var script: GDScript = load(TEST_DIR.path_join(file))
++		catcher.take()  # a parse error is reported below as a FAIL of its own
++		if script == null or not script.can_instantiate():
++			failed += 1
++			print("FAIL %s (does not parse; see the error above)" % file)
++			continue
++		for method in script.get_script_method_list():
++			var test_name: String = method["name"]
++			if not test_name.begins_with("test_"):
++				continue
++			var case = script.new()
++			case.tree = self
++			pg.reset_scene()
++			catcher.take()  # errors before this test aren't its fault
++			if case.has_method("before_each"):
++				await case.before_each(pg)
++			await case.call(test_name, pg)
++			if case.has_method("after_each"):
++				await case.after_each(pg)
++			for error in catcher.take():
++				if not case.expected_errors.any(func(fragment: String) -> bool: return error.contains(fragment)):
++					case.failures.append("engine/script error: " + error)
++			var label := "%s::%s" % [file.get_basename(), test_name]
++			if case.skipped != "":
++				skipped += 1
++				print("SKIP %s (%s)" % [label, case.skipped])
++			elif case.failures.is_empty():
++				passed += 1
++				print("PASS %s" % label)
++			else:
++				failed += 1
++				print("FAIL %s" % label)
++				for message in case.failures:
++					print("     - %s" % message)
++	print("\n%d passed, %d failed, %d skipped" % [passed, failed, skipped])
++	quit(1 if failed > 0 else 0)
+--- /dev/null
++++ b/tests/test_compare.gd
+@@ -0,0 +1,91 @@
++extends "res://tests/case.gd"
++
++
++func before_each(pg) -> void:
++	pg.compare.clear()
++
++
++func test_fmt(_pg) -> void:
++	check_eq(Compare.fmt(0.15), "0.15", "float")
++	check_eq(Compare.fmt(842.0), "842", "large float")
++	check_eq(Compare.fmt(60.0), "60", "whole number, no trailing .0")
++	check_eq(Compare.fmt(0.004), "0.004", "small float")
++	check_eq(Compare.fmt(0.0), "0", "zero")
++	check_eq(Compare.fmt(true), "on", "bool")
++	check_eq(Compare.fmt(Color(1, 0, 0)), "#ff0000", "colour")
++	check_eq(Compare.fmt("Manual"), "Manual", "string")
++
++
++func test_pin_then_change_gives_one_diff_line(pg) -> void:
++	pg.compare.pin()
++	check_eq(pg.compare.diff().size(), 0, "no diff right after pinning")
++	pg.set_param("sun_glow", 0.6)
++	check_eq(PackedStringArray(pg.compare.diff()), PackedStringArray(["sun_glow: 0.15 → 0.6"]), "one changed param")
++
++
++func test_hold_x_shows_a_and_release_restores_b(pg) -> void:
++	pg.compare.pin()
++	pg.set_param("sun_glow", 0.6)
++	pg.compare.show_a(true)
++	check_near(pg.get_param("sun_glow"), 0.15, 0.001, "A is shown")
++	check_eq(pg.compare.diff().size(), 1, "diff is still A vs B while A is shown")
++	pg.compare.show_a(false)
++	check_near(pg.get_param("sun_glow"), 0.6, 0.001, "B is back")
++
++
++func test_view_and_value_view_are_not_compared(pg) -> void:
++	pg.compare.pin()
++	pg.set_param("value_mode", "Notan")
++	pg.set_param("view", "Forest Gate")
++	check_eq(pg.compare.diff().size(), 0, "camera and value view are shared")
++	pg.compare.show_a(true)
++	check_eq(pg.get_param("value_mode"), "Notan", "showing A keeps the value view")
++	check_eq(pg.get_param("view"), "Forest Gate", "showing A keeps the camera")
++	check_near(pg.get_param("cam_fov"), 50.0, 0.01, "showing A keeps this view's own lens")
++	pg.compare.show_a(false)
++
++
++func test_lens_is_compared_in_the_pinned_view(pg) -> void:
++	pg.compare.pin()
++	pg.set_param("cam_fov", 35.0)
++	check_eq(PackedStringArray(pg.compare.diff()), PackedStringArray(["cam_fov: 60 → 35"]), "a lens change is an experiment variable")
++
++
++func test_flip_needs_a_pin(pg) -> void:
++	pg.compare.show_a(true)
++	check(not pg.compare.showing_a, "nothing to show without A")
++
++
++func test_pin_refused_in_scout(pg) -> void:
++	pg.set_param("view", "Scout")
++	pg.compare.pin()
++	check(not pg.compare.has_a(), "pin refused in Scout")
++	pg.set_param("view", "Gameplay")
++
++
++func test_entering_scout_releases_a(pg) -> void:
++	pg.compare.pin()
++	pg.set_param("sun_glow", 0.6)
++	pg.compare.show_a(true)
++	pg.set_param("view", "Scout")
++	check(not pg.compare.showing_a, "Scout leaves A")
++	check_near(pg.get_param("sun_glow"), 0.6, 0.001, "scene is B")
++	pg.set_param("view", "Gameplay")
++
++
++func test_focus_loss_releases_a(pg) -> void:
++	pg.compare.pin()
++	pg.set_param("sun_glow", 0.6)
++	pg.compare.show_a(true)
++	pg.notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
++	check(not pg.compare.showing_a, "A released when the window loses focus")
++	check_near(pg.get_param("sun_glow"), 0.6, 0.001, "scene is B")
++
++
++func test_hud_tag(pg) -> void:
++	check_eq(pg.compare.hud_tag(), "", "no tag without A")
++	pg.compare.pin()
++	check_eq(pg.compare.hud_tag(), "B · A pinned", "live = B")
++	pg.compare.show_a(true)
++	check_eq(pg.compare.hud_tag(), "SHOWING A", "holding X")
++	pg.compare.show_a(false)
+--- /dev/null
++++ b/tests/test_compare_pair.gd
+@@ -0,0 +1,34 @@
++extends "res://tests/case.gd"
++
++
++func before_each(pg) -> void:
++	pg.compare.clear()
++
++
++func test_log_row_format(_pg) -> void:
++	var lines: Array[String] = ["a: 1 → 2", "b: on → off"]
++	var row := Compare.log_row(lines)
++	check(row.begins_with("| 20"), "starts with the date")
++	check(row.ends_with("| | a: 1 → 2, b: on → off | | |"), "only the Changed column is filled")
++
++
++func test_save_pair_without_a_does_nothing(pg) -> void:
++	var path: String = await pg.compare.save_pair()
++	check_eq(path, "", "no file without A")
++
++
++func test_save_pair_writes_side_by_side_png(pg) -> void:
++	if not needs_window():
++		return
++	pg.compare.pin()
++	pg.set_param("sun_glow", 0.6)
++	var path: String = await pg.compare.save_pair()
++	check(FileAccess.file_exists(path), "PNG written")
++	var image := Image.load_from_file(path)
++	var frame: Vector2 = pg.get_viewport().get_visible_rect().size
++	check_eq(image.get_width(), int(frame.x) * 2, "two frames wide")
++	check_eq(image.get_height(), int(frame.y) + Compare.STRIP_LINE * 3, "frame plus text strip (header, 1 diff line, padding)")
++	check_near(pg.get_param("sun_glow"), 0.6, 0.001, "live state is B afterwards")
++	check(DisplayServer.clipboard_get().contains("sun_glow: 0.15 → 0.6"), "log row copied")
++	check(pg.panel.visible, "panel restored")
++	DirAccess.remove_absolute(path)
+--- /dev/null
++++ b/tests/test_compare_split.gd
+@@ -0,0 +1,74 @@
++extends "res://tests/case.gd"
++
++
++func before_each(pg) -> void:
++	pg.compare.clear()
++	if pg.compare.split:
++		await pg.compare.toggle_split()
++
++
++func after_each(pg) -> void:
++	if pg.compare.split:
++		await pg.compare.toggle_split()
++	pg.compare.clear()
++
++
++func test_split_needs_a_pin(pg) -> void:
++	await pg.compare.toggle_split()
++	check(not pg.compare.split, "split refused without A")
++
++
++func test_split_captures_a_frozen_image(pg) -> void:
++	if not needs_window():
++		return
++	pg.compare.pin()
++	pg.set_param("sun_glow", 0.9)
++	await pg.compare.toggle_split()
++	var image: Image = pg.compare.a_image
++	check(image != null and image.get_width() == int(pg.get_viewport().get_visible_rect().size.x), "A image is a full frame")
++	check_near(pg.get_param("sun_glow"), 0.9, 0.001, "live state is B again after capturing A")
++	check(pg.panel.visible, "panel restored after the capture")
++	check(pg.compare.view.active(), "split overlay is drawing")
++	check_eq(pg.compare.view.size, pg.get_viewport().get_visible_rect().size, "split overlay covers the whole frame")
++
++
++func test_value_view_change_recaptures_a(pg) -> void:
++	if not needs_window():
++		return
++	pg.compare.pin()
++	await pg.compare.toggle_split()
++	var first: Image = pg.compare.a_image
++	pg.set_param("value_mode", "Notan")
++	await frames(Compare.SETTLE_FRAMES + 10)
++	check(pg.compare.a_image != first, "A re-rendered after the value view changed")
++
++
++func test_flip_ignored_while_capturing(pg) -> void:
++	if not needs_window():
++		return
++	pg.compare.pin()
++	pg.set_param("sun_glow", 0.9)
++	pg.compare.toggle_split()  # not awaited: the capture is in flight
++	pg.compare.show_a(true)
++	check(not pg.compare.showing_a, "flip waits for the capture")
++	await frames(Compare.SETTLE_FRAMES + 5)
++	check_near(pg.get_param("sun_glow"), 0.9, 0.001, "scene ends on B")
++
++
++func test_scout_leaves_split(pg) -> void:
++	if not needs_window():
++		return
++	pg.compare.pin()
++	await pg.compare.toggle_split()
++	pg.set_param("view", "Scout")
++	check(not pg.compare.split, "Scout turns split off")
++	pg.set_param("view", "Gameplay")
++
++
++func test_screenshot_still_hides_overlays(pg) -> void:
++	if not needs_window():
++		return
++	var path: String = await pg.take_screenshot("overlay_check")
++	check(FileAccess.file_exists(path), "screenshot written")
++	check(pg.panel.visible, "panel back after the screenshot")
++	DirAccess.remove_absolute(path)
+--- /dev/null
++++ b/tests/test_debug_draw.gd
+@@ -0,0 +1,47 @@
++extends "res://tests/case.gd"
++
++## Render-mode captures land here (not in screenshots/), overwritten each run.
++const OUTPUT := "user://test_output"
++
++
++func after_each(pg) -> void:
++	pg.set_param("debug_draw", "Normal")
++
++
++func test_render_mode_sets_viewport_debug_draw(pg) -> void:
++	pg.set_param("debug_draw", "Wireframe")
++	check_eq(pg.get_viewport().debug_draw, Viewport.DEBUG_DRAW_WIREFRAME, "wireframe")
++	pg.set_param("debug_draw", "Normal")
++	check_eq(pg.get_viewport().debug_draw, Viewport.DEBUG_DRAW_DISABLED, "back to normal")
++
++
++func test_render_mode_is_not_scene_state(pg) -> void:
++	pg.set_param("debug_draw", "Unshaded")
++	check(not pg.get_state().has("debug_draw"), "debug views stay out of presets and A/B")
++	pg.reset_scene()
++	check_eq(pg.get_param("debug_draw"), "Unshaded", "Reset leaves the debug view alone")
++
++
++func test_each_render_mode_looks_different(pg) -> void:
++	if not needs_window():
++		return
++	pg.set_param("view", "Forest Gate")
++	var means := {}
++	for mode in pg.DEBUG_DRAWS:
++		pg.set_param("debug_draw", mode)
++		await frames(5)
++		await RenderingServer.frame_post_draw
++		var frame: Image = pg.get_viewport().get_texture().get_image()
++		DirAccess.make_dir_recursive_absolute(OUTPUT)
++		frame.save_png(OUTPUT.path_join("debug_%s.png" % mode.to_lower()))  # for a human look
++		frame.resize(64, 36)
++		var total := 0.0
++		for y in 36:
++			for x in 64:
++				var c := frame.get_pixel(x, y)
++				total += 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
++		means[mode] = total / (64 * 36)
++	var modes: Array = means.keys()
++	for i in modes.size():
++		for j in range(i + 1, modes.size()):
++			check(absf(means[modes[i]] - means[modes[j]]) > 0.004, "%s and %s look different (%.3f vs %.3f)" % [modes[i], modes[j], means[modes[i]], means[modes[j]]])
+--- /dev/null
++++ b/tests/test_light_gizmos.gd
+@@ -0,0 +1,41 @@
++extends "res://tests/case.gd"
++
++
++func after_each(pg) -> void:
++	pg.set_param("light_gizmos", false)
++
++
++func test_circle_is_segment_pairs_on_the_radius(_pg) -> void:
++	var pts := LightGizmos.circle(Vector3.ZERO, Vector3.RIGHT, Vector3.UP, 2.0, 16)
++	check_eq(pts.size(), 32, "two points per segment")
++	for p in pts:
++		check_near(p.length(), 2.0, 0.0001, "on the radius")
++
++
++func test_cone_rim_is_at_range(_pg) -> void:
++	var xf := Transform3D(Basis.IDENTITY, Vector3(1, 2, 3))
++	var pts := LightGizmos.cone(xf, 10.0, 30.0)
++	for i in LightGizmos.SEGMENTS * 2:  # the rim circle comes first
++		check_near(pts[i].distance_to(xf.origin), 10.0, 0.001, "rim point %d at the light's range" % i)
++	check_eq(pts.size(), LightGizmos.SEGMENTS * 2 + 16, "rim plus 8 edges")
++
++
++func test_gizmos_draw_and_skip_hidden_lights(pg) -> void:
++	if not needs_window():
++		return
++	pg.set_param("light_gizmos", true)
++	await frames(2)
++	var mesh: ImmediateMesh = pg.light_gizmos.mesh
++	check_eq(mesh.get_surface_count(), 1, "one line surface")
++	var with_hole := _vertex_count(mesh)
++	pg.set_param("supernatural", false)  # hides the hole spotlight
++	await frames(2)
++	check_eq(_vertex_count(mesh), with_hole - (LightGizmos.SEGMENTS * 2 + 16), "hidden spot light not drawn")
++	pg.set_param("light_gizmos", false)
++	await frames(1)
++	check_eq(mesh.get_surface_count(), 0, "cleared when off")
++
++
++func _vertex_count(mesh: Mesh) -> int:
++	var arrays := mesh.surface_get_arrays(0)
++	return (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
+--- /dev/null
++++ b/tests/test_perf_hud.gd
+@@ -0,0 +1,32 @@
++extends "res://tests/case.gd"
++
++
++func after_each(pg) -> void:
++	pg.set_param("perf_hud", false)
++
++
++func test_format(_pg) -> void:
++	check_eq(PerfHud.format(842.4, 0.51, 1.18, 312, 1_234_567, false),
++		"842 fps   CPU 0.51 ms   GPU 1.18 ms\n312 draws   1.2M prims", "readout")
++	check_eq(PerfHud.format(60.0, 1.0, 1.0, 5, 45_300, false), "60 fps   CPU 1.00 ms   GPU 1.00 ms\n5 draws   45k prims", "thousands")
++	check(PerfHud.format(60.0, 1.0, 1.0, 1, 1, true).contains("probe on"), "flags the probe's cost")
++
++
++func test_hud_updates_when_on(pg) -> void:
++	pg.set_param("perf_hud", true)
++	await seconds(PerfHud.INTERVAL + 0.3)
++	check(pg.perf_hud.text.contains("fps"), "readout filled in")
++	check(not pg.get_state().has("perf_hud"), "not scene state")
++
++
++func test_cpu_ms_is_work_not_frame_time(pg) -> void:
++	if not needs_window():
++		return
++	pg.set_param("perf_hud", true)
++	await seconds(PerfHud.INTERVAL * 2 + 0.2)
++	var numbers := RegEx.create_from_string(r"^(\d+) fps\s+CPU ([\d.]+) ms").search(pg.perf_hud.text)
++	check(numbers != null, "readout parses: %s" % pg.perf_hud.text)
++	if numbers:
++		var frame_ms := 1000.0 / float(numbers.get_string(1))
++		var cpu_ms := float(numbers.get_string(2))
++		check(cpu_ms < frame_ms, "CPU %.2f ms must be work, not the whole %.2f ms frame (vsync wait included)" % [cpu_ms, frame_ms])
+--- /dev/null
++++ b/tests/test_presets.gd
+@@ -0,0 +1,68 @@
++extends "res://tests/case.gd"
++
++const Presets := preload("res://scripts/presets.gd")
++const PATH := "user://test_presets.cfg"
++
++
++func before_each(_pg) -> void:
++	_remove()
++
++
++func after_each(_pg) -> void:
++	_remove()
++
++
++func _remove() -> void:
++	if FileAccess.file_exists(PATH):
++		DirAccess.remove_absolute(ProjectSettings.globalize_path(PATH))
++
++
++func test_overrides_keep_only_changed_keys(_pg) -> void:
++	var base := {"a": 1.0, "b": Color(1, 0, 0), "c": true}
++	var state := {"a": 1.0000001, "b": Color(0, 1, 0), "c": true}
++	check_eq(Presets.overrides(state, base).keys(), ["b"], "only the colour changed")
++
++
++func test_save_then_all_round_trips_values(pg) -> void:
++	var state: Dictionary = pg.get_state()
++	state["sun_glow"] = 0.6
++	state["sun_color"] = Color(1, 0.5, 0.25)
++	check_eq(Presets.save_user("My Dusk", state, pg.get_state(), PATH), "", "save succeeds")
++	var preset: Dictionary = Presets.all(PATH)["My Dusk"]
++	check_near(preset["sun_glow"], 0.6, 0.0001, "sun_glow saved")
++	check(preset["sun_color"].is_equal_approx(Color(1, 0.5, 0.25)), "colour saved")
++	check_eq(preset["view"], "Gameplay", "view always saved")
++	check_eq(preset.size(), 3, "only overrides plus view are saved")
++
++
++func test_saving_same_name_overwrites(pg) -> void:
++	var state: Dictionary = pg.get_state()
++	state["sun_glow"] = 0.6
++	Presets.save_user("X", state, pg.get_state(), PATH)
++	state["sun_glow"] = 0.3
++	Presets.save_user("X", state, pg.get_state(), PATH)
++	check_near(Presets.all(PATH)["X"]["sun_glow"], 0.3, 0.0001, "second save wins")
++
++
++func test_rejects_bad_names(pg) -> void:
++	var s: Dictionary = pg.get_state()
++	check(Presets.save_user("   ", s, s, PATH) != "", "blank name refused")
++	check(Presets.save_user("Moonlit", s, s, PATH) != "", "built-in name refused")
++	check(Presets.save_user("Reset", s, s, PATH) != "", "Reset refused")
++	check(Presets.save_user("a]b", s, s, PATH) != "", "section-breaking name refused")
++	check(not FileAccess.file_exists(PATH), "nothing written for refused names")
++
++
++func test_broken_file_is_not_overwritten(pg) -> void:
++	expect_error("ConfigFile parse error")
++	var f := FileAccess.open(PATH, FileAccess.WRITE)
++	f.store_string("[Broken\nsun_glow = \n")
++	f.close()
++	var s: Dictionary = pg.get_state()
++	check(Presets.save_user("New", s, s, PATH) != "", "save refuses to clobber an unreadable file")
++	check_eq(FileAccess.get_file_as_string(PATH), "[Broken\nsun_glow = \n", "file untouched")
++	check(Presets.all(PATH).has("Moonlit"), "built-ins still load")
++
++
++func test_missing_file_means_builtins_only(_pg) -> void:
++	check_eq(Presets.all(PATH).size(), Presets.ALL.size(), "no user presets")
+--- /dev/null
++++ b/tests/test_presets_ui.gd
+@@ -0,0 +1,63 @@
++extends "res://tests/case.gd"
++
++const Presets := preload("res://scripts/presets.gd")
++const PATH := "user://test_presets_ui.cfg"
++
++
++func before_each(pg) -> void:
++	_remove()
++	pg.preset_path = PATH
++	pg.panel.refresh_presets()
++
++
++func after_each(pg) -> void:
++	_remove()
++	pg.preset_path = Presets.USER_PATH
++	pg.panel.refresh_presets()
++	pg.set_typing(false)
++
++
++func _remove() -> void:
++	if FileAccess.file_exists(PATH):
++		DirAccess.remove_absolute(ProjectSettings.globalize_path(PATH))
++
++
++func test_saved_preset_appears_and_loads(pg) -> void:
++	pg.set_param("sun_glow", 0.7)
++	check(pg.save_preset("Glowy"), "save succeeds")
++	check(pg.panel.preset_buttons().has("Glowy"), "button added to the grid")
++	pg.reset_scene()
++	pg.apply_preset("Glowy")
++	check_near(pg.get_param("sun_glow"), 0.7, 0.001, "loading restores the value")
++
++
++func test_refused_name_keeps_grid(pg) -> void:
++	var before: PackedStringArray = pg.panel.preset_buttons()
++	check(not pg.save_preset("Moonlit"), "built-in name refused")
++	check_eq(pg.panel.preset_buttons(), before, "grid unchanged")
++
++
++func test_unknown_preset_is_ignored(pg) -> void:
++	pg.apply_preset("Nope")
++	check_eq(pg.get_param("view"), "Gameplay", "nothing applied")
++
++
++func test_typing_blocks_player_movement(pg) -> void:
++	pg.set_typing(true)
++	check(not pg.player.input_enabled, "player ignores WASD while typing")
++	pg.set_typing(false)
++	check(pg.player.input_enabled, "player moves again after typing")
++
++
++func test_clicking_the_scene_ends_typing(pg) -> void:
++	pg.panel._preset_name.grab_focus()
++	await frames(1)
++	check(not pg.player.input_enabled, "focus on the name field = typing")
++	var click := InputEventMouseButton.new()
++	click.button_index = MOUSE_BUTTON_LEFT
++	click.pressed = true
++	click.position = Vector2(1200, 450)  # middle of the 3D view, away from the panel
++	pg.panel._input(click)
++	await frames(1)
++	check(not pg.panel._preset_name.has_focus(), "name field let go of focus")
++	check(pg.player.input_enabled, "WASD works again")
+--- /dev/null
++++ b/tests/test_smoke.gd
+@@ -0,0 +1,18 @@
++extends "res://tests/case.gd"
++
++
++func test_scene_starts_in_gameplay_view(pg) -> void:
++	check_eq(pg.get_param("view"), "Gameplay", "starting view")
++	check_eq(pg.get_state().size(), pg.PARAM_ORDER.size(), "get_state covers PARAM_ORDER")
++
++
++func test_reset_restores_a_changed_param(pg) -> void:
++	pg.set_param("sun_glow", 0.9)
++	pg.reset_scene()
++	check_near(pg.get_param("sun_glow"), 0.15, 0.001, "sun_glow after reset")
++
++
++func test_window_check_skips_when_headless(_pg) -> void:
++	if not needs_window():
++		return
++	check(true, "running with a window")
+--- /dev/null
++++ b/tests/test_value_probe.gd
+@@ -0,0 +1,62 @@
++extends "res://tests/case.gd"
++
++
++func after_each(pg) -> void:
++	pg.set_param("probe", false)
++
++
++func _half_and_half() -> Image:
++	var image := Image.create_empty(10, 10, false, Image.FORMAT_RGBA8)
++	image.fill_rect(Rect2i(0, 0, 5, 10), Color.BLACK)
++	image.fill_rect(Rect2i(5, 0, 5, 10), Color.WHITE)
++	return image
++
++
++func test_luminance_weights(_pg) -> void:
++	check_near(ValueProbe.luminance(Color(0, 1, 0)), 0.7152, 0.0001, "Rec.709 green weight")
++
++
++func test_measure_half_black_half_white(_pg) -> void:
++	var s := ValueProbe.measure(_half_and_half())
++	check_near(s["p5"], 0.0, 0.001, "p5 is black")
++	check_near(s["p95"], 1.0, 0.001, "p95 is white")
++	check_eq(s["hist"][0], 50, "50 black pixels in the first bin")
++	check_eq(s["hist"][ValueProbe.BINS - 1], 50, "50 white pixels in the last bin")
++
++
++func test_measure_skips_excluded_rects(_pg) -> void:
++	var exclude: Array[Rect2] = [Rect2(5, 0, 5, 10)]
++	var s := ValueProbe.measure(_half_and_half(), exclude)
++	check_near(s["p95"], 0.0, 0.001, "white half excluded")
++	check_eq(s["hist"][ValueProbe.BINS - 1], 0, "no white counted")
++
++
++func test_probe_matches_stage7_measurements(pg) -> void:
++	if not needs_window():
++		return
++	pg.set_param("view", "Forest Gate")
++	pg.set_param("probe", true)
++	await seconds(0.6)
++	check(pg.probe.stats.has("p50"), "probe produced stats")
++	pg.hide_overlays()
++	await frames(2)
++	await RenderingServer.frame_post_draw
++	var frame: Image = pg.get_viewport().get_texture().get_image()
++	pg.restore_overlays()
++	var sky: float = ValueProbe.measure(frame.get_region(Rect2i(600, 60, 400, 60)))["p50"]
++	check_near(sky, 0.60, 0.03, "sky matches the Stage 7 manual measurement")
++	# The hole breathes (±30 %), so check it's the light point rather than an exact value.
++	var hole: float = ValueProbe.measure(frame.get_region(Rect2i(824, 240, 9, 9)))["p95"]
++	check(hole > 0.75, "the hole is the brightest point (Stage 7: 0.86), got %.2f" % hole)
++
++
++func test_sample_cost(pg) -> void:
++	if not needs_window():
++		return
++	pg.set_param("probe", true)
++	await frames(3)
++	var start := Time.get_ticks_usec()
++	pg.probe.sample()
++	var ms := (Time.get_ticks_usec() - start) / 1000.0
++	print("     probe sample: %.1f ms" % ms)
++	check(ms < 60.0, "one probe sample stays under 60 ms (got %.1f)" % ms)

@@ -1,0 +1,247 @@
+# Task 7 review package (diff -ruN --strip-trailing-cr, pre-task snapshot -> current). New docs/PERFORMANCE.md appended.
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/debug_boot.gd scripts/debug/debug_boot.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/debug_boot.gd	2026-11-08 11:53:19.071769000 +0800
++++ scripts/debug/debug_boot.gd	2026-11-08 11:53:56.499594400 +0800
+@@ -1,7 +1,9 @@
+ extends Node
+ ## Autoload. Wireframe debug draw only works for meshes created after this flag is set, so it
+-## has to run before the main scene loads.
++## has to run before the main scene loads. `--no-wireframes` (user args) skips it, for profiling.
+ 
+ 
+ func _init() -> void:
++	if "--no-wireframes" in OS.get_cmdline_user_args():
++		return
+ 	RenderingServer.set_debug_generate_wireframes(true)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/perf_hud.gd scripts/debug/perf_hud.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/debug/perf_hud.gd	2026-11-08 11:53:19.074230400 +0800
++++ scripts/debug/perf_hud.gd	2026-11-08 11:53:56.478129300 +0800
+@@ -12,20 +12,32 @@
+ var _gpu := 0.0
+ 
+ 
+ static func format(fps: float, cpu_ms: float, gpu_ms: float, draw_calls: int, primitives: int, probe_on: bool) -> String:
+ 	var text := "%d fps   CPU %.2f ms   GPU %.2f ms\n%d draws   %s prims" % [roundi(fps), cpu_ms, gpu_ms, draw_calls, _short(primitives)]
+ 	if probe_on:
+ 		text += "\nprobe on: its readback adds a few ms every 0.25 s"
+ 	return text
+ 
+ 
++## A Markdown table, one row per {view, grass, fps, cpu_ms, gpu_ms, draws, prims}.
++static func table(rows: Array[Dictionary]) -> String:
++	var lines := PackedStringArray([
++		"| View | Grass | FPS | CPU ms | GPU ms | Draws | Prims |",
++		"|---|---|---:|---:|---:|---:|---:|",
++	])
++	for r in rows:
++		lines.append("| %s | %s | %d | %.2f | %.2f | %d | %s |" % [r.view, "on" if r.grass else "off", roundi(r.fps),
++			r.cpu_ms, r.gpu_ms, r.draws, _short(int(r.prims))])
++	return "\n".join(lines) + "\n"
++
++
+ static func _short(n: int) -> String:
+ 	if n >= 1_000_000:
+ 		return "%.1fM" % (n / 1_000_000.0)
+ 	if n >= 1000:
+ 		return "%dk" % roundi(n / 1000.0)
+ 	return str(n)
+ 
+ 
+ func _ready() -> void:
+ 	add_to_group("overlay")
+@@ -64,10 +76,34 @@
+ 	_cpu += RenderingServer.viewport_get_measured_render_time_cpu(rid) + RenderingServer.get_frame_setup_time_cpu()
+ 	_gpu += RenderingServer.viewport_get_measured_render_time_gpu(rid)
+ 	_frames += 1
+ 	_timer += delta
+ 	if _timer < INTERVAL:
+ 		return
+ 	text = format(Performance.get_monitor(Performance.TIME_FPS), _cpu / _frames, _gpu / _frames,
+ 		int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+ 		int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)), pg.get_param("probe"))
+ 	_reset()
++
++
++## Averages fps, CPU/GPU ms, draws and prims over frame_count frames, with the same sources as the
++## readout. Turns render-time measuring on for the duration and restores it afterwards.
++func measure(frame_count: int) -> Dictionary:
++	var rid := get_viewport().get_viewport_rid()
++	RenderingServer.viewport_set_measure_render_time(rid, true)
++	for _f in 2:  # the first measured frames are not yet valid
++		await get_tree().process_frame
++	var cpu := 0.0
++	var gpu := 0.0
++	var fps := 0.0
++	var draws := 0.0
++	var prims := 0.0
++	for _f in frame_count:
++		await get_tree().process_frame
++		cpu += RenderingServer.viewport_get_measured_render_time_cpu(rid) + RenderingServer.get_frame_setup_time_cpu()
++		gpu += RenderingServer.viewport_get_measured_render_time_gpu(rid)
++		fps += Performance.get_monitor(Performance.TIME_FPS)
++		draws += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
++		prims += Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
++	RenderingServer.viewport_set_measure_render_time(rid, visible)
++	var n := float(maxi(frame_count, 1))
++	return {"fps": fps / n, "cpu_ms": cpu / n, "gpu_ms": gpu / n, "draws": int(draws / n), "prims": int(prims / n)}
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/playground.gd scripts/playground.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/playground.gd	2026-11-08 11:53:19.078709900 +0800
++++ scripts/playground.gd	2026-11-08 11:53:56.536755400 +0800
+@@ -634,12 +634,49 @@
+ 
+ func _run_command_line() -> void:
+ 	var args := OS.get_cmdline_user_args()
+ 	for arg in args:
+ 		if arg.begins_with("--preset="):
+ 			apply_preset(arg.trim_prefix("--preset=").trim_prefix("\"").trim_suffix("\""))
+ 	if "--capture-views" in args:
+ 		for _f in 30:  # let shadows/SSAO settle
+ 			await get_tree().process_frame
+ 		await capture_all_views()
++	if "--profile-views" in args:
++		for _f in 30:
++			await get_tree().process_frame
++		await profile_views()
+ 	if "--quit" in args:
+ 		get_tree().quit()
++
++
++## Measures every fixed view with grass on then off (settle 30 frames, measure 120), prints the
++## table and writes it to screenshots/profile_<datetime>.md. Run with --disable-vsync.
++func profile_views() -> String:
++	var previous := _view
++	var grass_was := grass.visible
++	hide_overlays()
++	var rows: Array[Dictionary] = []
++	for i in _cameras.size():
++		if i == SCOUT:
++			continue
++		_set_view(i)
++		for on in [true, false]:
++			grass.visible = on
++			for _f in 30:
++				await get_tree().process_frame
++			var m: Dictionary = await perf_hud.measure(120)
++			m["view"] = view_names()[i]
++			m["grass"] = on
++			rows.append(m)
++	grass.visible = grass_was
++	restore_overlays()
++	_set_view(previous)
++	panel.sync()
++	var text := PerfHud.table(rows)
++	print(text)
++	var dir := screenshot_path("profile").get_base_dir()
++	var stamp := Time.get_datetime_string_from_system().replace(":", "-")
++	var file := FileAccess.open(dir.path_join("profile_%s.md" % stamp), FileAccess.WRITE)
++	if file:
++		file.store_string(text)
++	return text
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_profile.gd tests/test_profile.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_profile.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_profile.gd	2026-11-08 11:53:30.927917200 +0800
+@@ -0,0 +1,22 @@
++extends "res://tests/case.gd"
++
++
++func test_table_format(_pg) -> void:
++	var rows: Array[Dictionary] = [
++		{"view": "Camp", "grass": true, "fps": 300.0, "cpu_ms": 1.5, "gpu_ms": 1.234, "draws": 400, "prims": 900000},
++		{"view": "Camp", "grass": false, "fps": 400.0, "cpu_ms": 1.2, "gpu_ms": 0.9, "draws": 300, "prims": 500000},
++	]
++	var lines := PerfHud.table(rows).strip_edges().split("\n")
++	check_eq(lines.size(), 4, "header + separator + 2 rows")
++	check(lines[1].begins_with("|") and lines[1].contains("---"), "separator row")
++	check(lines[2].contains("1.23"), "gpu_ms to 2 decimals")
++
++
++func test_measure_reads_gpu(pg) -> void:
++	if not needs_window():
++		return
++	var was: bool = pg.perf_hud.visible
++	var result: Dictionary = await pg.perf_hud.measure(10)
++	check(result.gpu_ms > 0.0, "gpu_ms > 0: %s" % result)
++	check(result.draws > 0, "draws > 0")
++	check_eq(pg.perf_hud.visible, was, "visibility restored")
+--- /dev/null	2026-11-08 11:55:31.000000000 +0800
++++ docs/PERFORMANCE.md	2026-11-08 11:54:56.606662900 +0800
+@@ -0,0 +1,79 @@
++# Performance
++
++Target: the game holds 60 fps on a mid-range PC.
++
++## Method
++
++`PerfHud.measure(frames)` averages CPU ms, GPU ms, draw calls and primitives over N frames, using the
++same sources as the on-screen perf HUD (CPU = viewport CPU render time + `get_frame_setup_time_cpu()`;
++GPU = viewport measured GPU render time). `--profile-views` visits every fixed view (Scout skipped),
++with grass on then off: settle 30 frames, measure 120, overlays hidden. Grass cost = GPU ms (on) minus
++GPU ms (off).
++
++Dev machine: RTX 3070, i7-12700F, **1920x1080**, vsync off. The FPS column is Godot's `TIME_FPS`
++monitor, which updates about once a second and lags view changes; trust the ms columns.
++
++## Budgets
++
++- Grass: at most 2.0 ms GPU.
++- Whole frame: at most 7.0 ms GPU in the worst named view.
++
++Rationale for "mid-range": 7 ms of GPU on an RTX 3070 is roughly 60 fps (16.7 ms) on a GTX 1660 or an
++RTX 3050, which are about 2.3x slower, leaving headroom for CPU and driver costs.
++
++## Result (wireframes on, 1920x1080)
++
++| View | Grass | FPS | CPU ms | GPU ms | Draws | Prims |
++|---|---|---:|---:|---:|---:|---:|
++| Gameplay | on | 68 | 0.38 | 1.77 | 469 | 366k |
++| Gameplay | off | 92 | 0.36 | 1.45 | 453 | 83k |
++| Reveal | on | 92 | 0.35 | 1.44 | 394 | 309k |
++| Reveal | off | 92 | 0.34 | 1.32 | 381 | 76k |
++| Long Lens | on | 258 | 0.25 | 1.30 | 203 | 96k |
++| Long Lens | off | 662 | 0.24 | 1.28 | 198 | 19k |
++| Path Low | on | 662 | 0.32 | 1.41 | 352 | 291k |
++| Path Low | off | 662 | 0.31 | 1.26 | 337 | 40k |
++| Forest Gate | on | 662 | 0.29 | 1.43 | 304 | 221k |
++| Forest Gate | off | 695 | 0.27 | 1.26 | 292 | 29k |
++| Gate Thirds | on | 708 | 0.25 | 1.49 | 260 | 204k |
++| Gate Thirds | off | 708 | 0.28 | 1.26 | 249 | 22k |
++| Clearing | on | 708 | 0.23 | 1.28 | 141 | 117k |
++| Clearing | off | 708 | 0.23 | 1.19 | 134 | 9k |
++| Landmark Foot | on | 732 | 0.21 | 1.07 | 73 | 64k |
++| Landmark Foot | off | 733 | 0.19 | 1.02 | 70 | 6k |
++| Camp | on | 733 | 0.20 | 1.33 | 92 | 73k |
++| Camp | off | 733 | 0.19 | 1.12 | 88 | 10k |
++| Overview | on | 733 | 0.33 | 1.22 | 269 | 66k |
++| Overview | off | 774 | 0.32 | 1.22 | 269 | 66k |
++
++- Worst grass cost: Gameplay, 0.32-0.40 ms GPU (budget 2.0). Next: Camp 0.21, Gate Thirds 0.23.
++- Worst whole frame: Gameplay with grass, 1.77-1.82 ms GPU (budget 7.0).
++- Both budgets are met with a wide margin, so **nothing was tuned**; grass defaults are unchanged
++  (24 blades/m2, fade 25/45).
++
++## Top 3 costs
++
++1. Gameplay (the follow camera sees the most grass and trees): 1.8 ms GPU, 469 draws, 366k prims.
++2. Reveal: 1.44 ms GPU, 394 draws, 309k prims.
++3. Path Low / Forest Gate: about 1.4 ms GPU, 300-350 draws. Grass is only 0.15-0.2 ms of that; the
++   rest is the shared scene (trees, shadows, fog).
++
++Grass is the largest primitive contributor (about 280k of Gameplay's 366k) but cheap per primitive.
++
++## Wireframe finding
++
++`RenderingServer.set_debug_generate_wireframes(true)` (needed for the F2 Wireframe view) was compared
++with `--no-wireframes`: the profile tables are the same within noise (Gameplay 1.77 vs 1.82 ms GPU,
++Gate Thirds grass cost 0.23 vs 0.24 ms), and startup is 2.26-2.50 s vs 2.23-2.39 s (3 runs each, wall
++clock, `--quit`), no measurable difference. It stays on by default; `--no-wireframes` skips it, and F2
++Wireframe then draws nothing useful.
++
++## Re-running
++
++```bash
++GODOT=/d/softwares/Godot_v4.6-stable_mono_win64/Godot_v4.6-stable_mono_win64_console.exe
++"$GODOT" --path . --disable-vsync --resolution 1920x1080 -- --profile-views --quit
++# add --no-wireframes after -- to compare
++```
++
++It prints the table and writes `screenshots/profile_<datetime>.md`.

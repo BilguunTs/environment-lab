@@ -1,0 +1,302 @@
+# Task 5 review package (diff -ruN --strip-trailing-cr, pre-task snapshot -> current). New dirs tools/ and assets/grass/ listed separately at the end.
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/playground.gd scripts/playground.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/playground.gd	2026-11-08 11:41:09.741879800 +0800
++++ scripts/playground.gd	2026-11-08 11:42:20.755092000 +0800
+@@ -30,21 +30,21 @@
+ ## Applied in this order: the view must switch before FOV is set on it.
+ const PARAM_ORDER := [
+ 	"view", "cam_fov", "cam_height", "cam_distance", "cam_pitch", "cam_shift_x", "cam_shift_y",
+ 	"guides_grid", "guides_center", "guides_aspect",
+ 	"value_mode", "value_squint", "value_split",
+ 	"light_energy", "light_elevation", "light_azimuth", "sun_color", "ambient_energy", "shadows",
+ 	"sky_color", "zenith_color", "sun_glow", "fog_enabled", "fog_density", "fog_height_density",
+ 	"light_shafts", "shaft_density", "mist",
+ 	"wind", "wind_direction", "motes",
+ 	"supernatural", "spirit_amount", "hole_glow",
+-	"landmark_visible", "props_visible",
++	"landmark_visible", "props_visible", "grass_visible",
+ 	"forest_mode", "scatter_seed", "tree_density", "tree_spacing", "tree_clumping", "rock_density", "show_zones",
+ ]
+ 
+ ## [0] gameplay, [1] scout, then authored viewpoints, then runtime bookmarks.
+ var _cameras: Array[Camera3D] = []
+ var _default_fovs: Array[float] = []
+ var _view := GAMEPLAY
+ var _last_fixed_view := GAMEPLAY  # where F returns to after scouting
+ var _bookmark_count := 0
+ var _default_state: Dictionary
+@@ -64,20 +64,21 @@
+ var _overlay_restore := {}  # CanvasItem -> visible, while a capture hides the overlays
+ var _overlay_depth := 0  # nested hide_overlays() calls; only the outermost pair acts
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var scout_cam: ScoutCamera = $ScoutCamera
+ @onready var sun: DirectionalLight3D = $Sun
+ @onready var env: Environment = $WorldEnvironment.environment
+ @onready var landmark: Node3D = $Landmark
+ @onready var props: Node3D = $Props
++@onready var grass: GrassField = $Grass
+ @onready var mist: FogVolume = $Mist
+ @onready var wind: Wind = $Wind
+ @onready var motes: GPUParticles3D = $Player/Motes
+ @onready var spirit_stream: SpiritStream = $SpiritStream
+ @onready var hole_glow: Breathe = $Landmark/HoleGlow
+ @onready var hole_light: SpotLight3D = $Landmark/HoleLight
+ @onready var sky_material: ShaderMaterial = env.sky.sky_material
+ ## The hand-placed forest. Detached from the tree (not just hidden) in procedural mode, so its
+ ## colliders go away too.
+ @onready var manual_forest: Node3D = $Forest
+@@ -219,20 +220,21 @@
+ 		"wind_direction": return wind.direction_degrees
+ 		"motes": return motes.emitting
+ 		"supernatural": return spirit_stream.visible
+ 		"spirit_amount": return spirit_stream.amount_ratio
+ 		"hole_glow": return hole_glow.intensity
+ 		"fog_enabled": return env.fog_enabled
+ 		"fog_density": return env.fog_density
+ 		"fog_height_density": return env.fog_height_density
+ 		"landmark_visible": return landmark.visible
+ 		"props_visible": return props.visible
++		"grass_visible": return grass.visible
+ 		"forest_mode": return _forest_mode
+ 		"scatter_seed": return float(tree_scatter.random_seed)
+ 		"tree_density": return tree_scatter.density
+ 		"tree_spacing": return tree_scatter.min_spacing
+ 		"tree_clumping": return tree_scatter.clumping
+ 		"rock_density": return rock_scatter.density
+ 		"show_zones": return _show_zones
+ 		"probe": return probe.visible
+ 		"perf_hud": return perf_hud.visible
+ 		"light_gizmos": return light_gizmos.visible
+@@ -304,20 +306,21 @@
+ 			spirit_stream.visible = value
+ 			hole_glow.visible = value
+ 			hole_light.visible = value
+ 		"spirit_amount": spirit_stream.amount_ratio = value
+ 		"hole_glow": hole_glow.intensity = value
+ 		"fog_enabled": env.fog_enabled = value
+ 		"fog_density": env.fog_density = value
+ 		"fog_height_density": env.fog_height_density = value
+ 		"landmark_visible": landmark.visible = value
+ 		"props_visible": props.visible = value
++		"grass_visible": grass.visible = value
+ 		"forest_mode": _set_forest_mode(value)
+ 		"scatter_seed":
+ 			tree_scatter.random_seed = int(value)
+ 			rock_scatter.random_seed = int(value)
+ 		"tree_density": tree_scatter.density = value
+ 		"tree_spacing": tree_scatter.min_spacing = value
+ 		"tree_clumping": tree_scatter.clumping = value
+ 		"rock_density": rock_scatter.density = value
+ 		"show_zones":
+ 			_show_zones = value
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/ui/dev_panel.gd scripts/ui/dev_panel.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scripts/ui/dev_panel.gd	2026-11-08 11:41:09.725700900 +0800
++++ scripts/ui/dev_panel.gd	2026-11-08 11:42:20.756720800 +0800
+@@ -77,20 +77,21 @@
+ 
+ 	_section("Supernatural")
+ 	_check("supernatural", "Monolith awake (glow, shaft, spirits)")
+ 	_slider("spirit_amount", "Spirits", 0, 1, 0.01)
+ 	_slider("hole_glow", "Hole glow", 0, 2, 0.01)
+ 	_note("Spirits flow from the hole to the ember. The cold shaft from the hole only shows while Light shafts is on.")
+ 
+ 	_section("Environment")
+ 	_check("landmark_visible", "Landmark")
+ 	_check("props_visible", "Story props (camp, posts, cairns, stumps, log)")
++	_check("grass_visible", "Grass")
+ 	_option("forest_mode", "Forest", PackedStringArray(_pg.FOREST_MODES))
+ 	_slider("scatter_seed", "Seed", 1, 999, 1)
+ 	_slider("tree_density", "Tree density", 0, 10, 0.1)
+ 	_slider("tree_spacing", "Tree spacing", 1.5, 8, 0.1)
+ 	_slider("tree_clumping", "Clumping", 0, 1, 0.01)
+ 	_slider("rock_density", "Rock density", 0, 4, 0.05)
+ 	var scatter_row := HBoxContainer.new()
+ 	_box.add_child(scatter_row)
+ 	scatter_row.add_child(_button("New seed", _pg.new_seed))
+ 	_check("show_zones", "Show exclusion zones")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scenes/playground.tscn scenes/playground.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/scenes/playground.tscn	2026-11-08 11:41:09.752654900 +0800
++++ scenes/playground.tscn	2026-11-08 11:42:20.755092000 +0800
+@@ -16,20 +16,22 @@
+ [ext_resource type="Material" path="res://assets/materials/ridge.tres" id="16"]
+ [ext_resource type="Script" path="res://scripts/camera/follow_camera.gd" id="17"]
+ [ext_resource type="Script" path="res://scripts/ui/composition_guides.gd" id="18"]
+ [ext_resource type="Script" path="res://scripts/ui/dev_panel.gd" id="19"]
+ 
+ [ext_resource type="Script" path="res://scripts/camera/viewpoint.gd" id="viewpoint"]
+ [ext_resource type="Script" path="res://scripts/camera/scout_camera.gd" id="scout"]
+ [ext_resource type="Shader" path="res://assets/shaders/value_view.gdshader" id="value_shader"]
+ 
+ [ext_resource type="Shader" path="res://assets/shaders/gradient_sky.gdshader" id="sky_shader"]
++[ext_resource type="Script" path="res://scripts/environment/grass_field.gd" id="grass_script"]
++[ext_resource type="Image" path="res://assets/grass/playground_grass.res" id="grass_mask"]
+ [ext_resource type="Shader" path="res://assets/shaders/ground_mist.gdshader" id="mist_shader"]
+ [ext_resource type="Script" path="res://scripts/effects/flicker_light.gd" id="flicker"]
+ 
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/tree_spruce_a.tscn" id="kit_tree_spruce_a"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/tree_spruce_b.tscn" id="kit_tree_spruce_b"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/tree_larch.tscn" id="kit_tree_larch"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_a.tscn" id="kit_rock_boulder_a"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_b.tscn" id="kit_rock_boulder_b"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_shard.tscn" id="kit_rock_shard"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/ground_mound_a.tscn" id="kit_ground_mound_a"]
+@@ -1266,20 +1268,26 @@
+ 
+ [node name="Ridge11" type="MeshInstance3D" parent="Background"]
+ mesh = SubResource("SphereMesh_14")
+ material_override = ExtResource("16")
+ transform = Transform3D(67.8512, 0, 19.7096, 0, 22, 0, -59.1288, 0, 22.6171, 0, 0, 115)
+ 
+ [node name="Wind" type="Node" parent="."]
+ script = ExtResource("wind_script")
+ strength = 0.6
+ 
++[node name="Grass" type="Node3D" parent="."]
++transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 6)
++script = ExtResource("grass_script")
++extent = Vector2(74, 104)
++mask = ExtResource("grass_mask")
++
+ [node name="Mist" type="FogVolume" parent="."]
+ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -5)
+ size = Vector3(84, 4, 124)
+ material = SubResource("mist_material")
+ 
+ [node name="Bounds" type="StaticBody3D" parent="."]
+ 
+ [node name="North" type="CollisionShape3D" parent="Bounds"]
+ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -64)
+ shape = SubResource("BoxShape3D_15")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_grass_scene.gd tests/test_grass_scene.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_grass_scene.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_grass_scene.gd	2026-11-08 11:41:45.223874800 +0800
+@@ -0,0 +1,35 @@
++extends "res://tests/case.gd"
++## The starter meadow in the playground: loaded from file, off the path and clearing, on the mounds.
++
++
++func test_playground_has_grass(pg) -> void:
++	await frames(2)
++	check(pg.grass.mask != null and pg.grass.mask.resource_path.ends_with("playground_grass.res"), "mask loaded from file")
++	check(pg.grass.blade_count() > 10000, "the starter field is populated")
++
++
++func test_grass_visible_param(pg) -> void:
++	check_eq(pg.PARAM_ORDER.find("grass_visible"), pg.PARAM_ORDER.find("props_visible") + 1, "param order")
++	pg.set_param("grass_visible", false)
++	check(not pg.grass.visible, "toggle hides the field")
++	pg.reset_scene()
++	check(pg.grass.visible, "default is on")
++
++
++func test_path_is_clear_of_grass(pg) -> void:
++	for node_name in ["Path", "SideTrail"]:
++		var pts: PackedVector2Array = pg.get_node(node_name).get_centerline_world()
++		for p in pts:
++			check_near(pg.grass.sample(p).x, 0.0, 0.01, "no grass on the %s centreline" % node_name)
++
++
++func test_clearing_is_clear_of_grass(pg) -> void:
++	var c: Vector3 = pg.get_node("Clearing").global_position
++	for off in [Vector2.ZERO, Vector2(6, 0), Vector2(0, -7), Vector2(-5, 5)]:
++		check_near(pg.grass.sample(Vector2(c.x, c.z) + off).x, 0.0, 0.01, "no grass in the clearing")
++
++
++func test_grass_on_mounds(pg) -> void:
++	await frames(2)
++	var m: Node3D = pg.get_node("Terrain/Mound1")
++	check(pg.grass.ground_height_at(Vector2(m.global_position.x, m.global_position.z)) > 0.2, "cache sees the mound")
+--- /dev/null	2026-11-08 11:44:05.000000000 +0800
++++ tools/make_starter_grass.gd	2026-11-08 11:42:13.316959400 +0800
+@@ -0,0 +1,84 @@
++extends SceneTree
++## Run once to (re)write the starter meadow mask:
++##   godot --headless --path . -s res://tools/make_starter_grass.gd
++## Density is patchy noise, zero on the path and the clearing; height grows with distance from
++## the path. Texels are written directly (R density, G height, byte-scaled).
++
++const OUT := "res://assets/grass/playground_grass.res"
++const FIELD_CENTRE := Vector2(0, 6)
++const FIELD_EXTENT := Vector2(74, 104)
++const TEXEL := 0.5
++const PATH_CLEAR := 1.0  ## metres beyond the path's half-width with no grass
++const PATH_RAMP := 2.0  ## ...then density ramps to full over this much more
++const HEIGHT_NEAR := 0.3
++const HEIGHT_FAR := 0.9
++const HEIGHT_FAR_AT := 15.0
++
++
++func _init() -> void:
++	var scene: Node = load("res://scenes/playground.tscn").instantiate()
++	var lines: Array = []  # [PackedVector2Array centreline, PackedFloat32Array half widths]
++	for node_name in ["Path", "SideTrail"]:
++		var n: Node = scene.get_node(node_name)
++		var xf: Transform3D = Transform3D(n.transform)
++		var pts := PackedVector2Array()
++		var halves := PackedFloat32Array()
++		var samples: PackedVector2Array = n.call("_sample")
++		for i in samples.size():
++			var w := xf * Vector3(samples[i].x, 0.0, samples[i].y)
++			pts.append(Vector2(w.x, w.z))
++			# Same width profile as PathRibbon, plus allowance for the edge noise bulges.
++			var t := float(i) / float(samples.size() - 1)
++			var half: float = float(n.get("width")) * 0.5 * lerpf(1.0, float(n.get("end_width_scale")), smoothstep(0.7, 1.0, t))
++			half *= lerpf(float(n.get("start_width_scale")), 1.0, smoothstep(0.0, 0.25, t))
++			halves.append(half * (1.0 + float(n.get("edge_noise")) * 0.8))
++		lines.append([pts, halves])
++	var clearing: Node3D = scene.get_node("Clearing")
++	var clearing_c := Vector2(clearing.position.x, clearing.position.z)
++	var clearing_r: float = (clearing.get_node("Floor") as MeshInstance3D).mesh.get("top_radius")
++
++	var size := Vector2i(ceili(FIELD_EXTENT.x / TEXEL), ceili(FIELD_EXTENT.y / TEXEL))
++	var corner := FIELD_CENTRE - FIELD_EXTENT * 0.5
++	var noise := FastNoiseLite.new()
++	noise.seed = 9
++	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
++	noise.frequency = 1.0 / 12.0
++	var hnoise := FastNoiseLite.new()
++	hnoise.seed = 19
++	hnoise.frequency = 1.0 / 9.0
++
++	var data := PackedByteArray()
++	data.resize(size.x * size.y * 2)
++	for y in size.y:
++		for x in size.x:
++			var p := corner + (Vector2(x, y) + Vector2(0.5, 0.5)) * TEXEL
++			var d := INF  # distance beyond the nearest path edge
++			for line: Array in lines:
++				d = minf(d, _dist_beyond_edge(p, line[0], line[1]))
++			var patch := lerpf(0.4, 1.0, clampf(noise.get_noise_2d(p.x, p.y) * 0.5 + 0.5, 0.0, 1.0))
++			var density := patch * smoothstep(PATH_CLEAR, PATH_CLEAR + PATH_RAMP, d)
++			if p.distance_to(clearing_c) <= clearing_r + 0.5:
++				density = 0.0
++			var h_t := clampf(maxf(d, 0.0) / HEIGHT_FAR_AT, 0.0, 1.0)
++			var h := lerpf(HEIGHT_NEAR, HEIGHT_FAR, h_t) + hnoise.get_noise_2d(p.x, p.y) * 0.08
++			# G is 0..1 across min_height..max_height (0.25..0.9); store the target metres.
++			var g := clampf((h - 0.25) / (0.9 - 0.25), 0.0, 1.0)
++			var i := (y * size.x + x) * 2
++			data[i] = roundi(clampf(density, 0.0, 1.0) * 255.0)
++			data[i + 1] = roundi(g * 255.0)
++	var image := Image.create_from_data(size.x, size.y, false, Image.FORMAT_RG8, data)
++	var err := ResourceSaver.save(image, OUT)
++	print("starter grass mask %s: %s" % [size, "saved" if err == OK else "error %d" % err])
++	scene.free()
++	quit(0 if err == OK else 1)
++
++
++## Distance from p to the path's edge (negative inside), by nearest centreline segment.
++static func _dist_beyond_edge(p: Vector2, pts: PackedVector2Array, halves: PackedFloat32Array) -> float:
++	var best := INF
++	for i in pts.size() - 1:
++		var a := pts[i]
++		var ab := pts[i + 1] - a
++		var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
++		best = minf(best, p.distance_to(a + ab * t) - lerpf(halves[i], halves[i + 1], t))
++	return best
+# assets/grass:
+total 64
+drwxr-xr-x 1 user 197121     0 Nov  8 11:42 .
+drwxr-xr-x 1 user 197121     0 Nov  8 11:42 ..
+-rw-r--r-- 1 user 197121 61936 Nov  8 11:42 playground_grass.res

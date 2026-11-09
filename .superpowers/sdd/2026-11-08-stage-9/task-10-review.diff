@@ -1,0 +1,290 @@
+# Task 10 review package (diff -ruN --strip-trailing-cr, pre-task snapshot -> current; line-ending-only changes are invisible here by design)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_compare_pair.gd tests/test_compare_pair.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/tests/test_compare_pair.gd	2026-11-08 12:02:56.904279400 +0800
++++ tests/test_compare_pair.gd	2026-11-08 12:06:56.653960900 +0800
+@@ -1,23 +1,25 @@
+ extends "res://tests/case.gd"
+ 
+ 
+ var _clipboard := ""
+ 
+ 
+ func before_each(pg) -> void:
+-	_clipboard = DisplayServer.clipboard_get()
++	if DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD):  # the headless display server has none
++		_clipboard = DisplayServer.clipboard_get()
+ 	pg.compare.clear()
+ 
+ 
+ func after_each(_pg) -> void:
+-	DisplayServer.clipboard_set(_clipboard)
++	if DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD):
++		DisplayServer.clipboard_set(_clipboard)
+ 
+ 
+ func test_log_row_format(_pg) -> void:
+ 	var lines: Array[String] = ["a: 1 → 2", "b: on → off"]
+ 	var row := Compare.log_row(lines)
+ 	check(row.begins_with("| 20"), "starts with the date")
+ 	check(row.ends_with("| | a: 1 → 2, b: on → off | | |"), "only the Changed column is filled")
+ 
+ 
+ func test_save_pair_without_a_does_nothing(pg) -> void:
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/main.md	2026-11-08 12:02:56.909918000 +0800
++++ main.md	2026-11-08 12:03:34.050747000 +0800
+@@ -140,20 +140,21 @@
+ - Wide Reveal.
+ - Low Silhouette.
+ - Foggy Forest.
+ - Ritual Clearing.
+ 
+ Allow me to return to the default state easily.
+ 
+ Add screenshot capture or a simple comparison workflow if it can be implemented reliably without distracting from the core project.
+ 
+ Avoid building a database, complex preset manager, or custom editor plugin.
++
+ Exception (Stage 9, approved): addons/grass_painter, a single-purpose grass mask painter. No other editor plugins.
+ 
+ ## 6. Procedural environment tools
+ 
+ Introduce procedural generation only after the manually arranged blockout is working.
+ 
+ Start with simple tools for:
+ 
+ - Scattering trees, rocks, and small props.
+ - Controlling density and minimum spacing.
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/README.md	2026-11-08 12:02:56.914013100 +0800
++++ README.md	2026-11-08 12:06:12.003810400 +0800
+@@ -1,30 +1,33 @@
+ # Environment Forge
+ 
+ A small Godot 4 playground for practising stylized environment art and level design:
+ composition, silhouettes, depth, lighting and atmosphere. The brief and staged roadmap live in
+-[main.md](main.md). **Current stage: 8 (comparison, presets, visual debugging).**
++[main.md](main.md). **Current stage: 9 (wind, painted grass, profiling, reuse).**
+ 
+ ## Run
+ 
+ - Engine: **Godot 4.6** (the mono build works; the project is pure GDScript).
+ - Open `project.godot` in Godot and press **F5**, or run from a terminal:
+ 
+ ```sh
+ Godot_v4.6-stable_mono_win64.exe --path D:/DevEnv/GDOT/environment-lab
+ ```
+ 
+ Optional command-line flags (after `--`):
+ 
+ ```sh
+ # apply a preset, render every viewpoint to screenshots/, then quit
+ Godot... --path . -- "--preset=Foggy Forest" --capture-views --quit
++
++# measure every fixed view with grass on then off, write screenshots/profile_<datetime>.md
++Godot... --path . --resolution 1920x1080 --disable-vsync -- --profile-views --quit
+ ```
+ 
+ ## Controls
+ 
+ | Input | Action |
+ | --- | --- |
+ | WASD / arrows | Move (relative to the active camera, cinematic views included) |
+ | Shift | Sprint |
+ | Right-mouse drag | Orbit the gameplay camera / look around in Scout |
+ | Q / E | Orbit left / right (gameplay), down / up (Scout) |
+@@ -45,23 +48,23 @@
+ shot's *intent* (what it is meant to communicate).
+ 
+ ## Dev panel
+ 
+ Each control below changes the scene.
+ 
+ - **Camera:** active view and FOV with its mm equivalent (applies to whichever camera is active). Gameplay-camera height, distance, pitch and **Shift X/Y** (lens shift: slides the frame without rotating it, so the player can sit on a third). Buttons for Scout and Bookmark.
+ - **Framing & Values:** grid (thirds, golden section, diagonals), aspect mask (2.39:1, 1.85:1, 4:3, 1:1), centre marker. Value view (grayscale, 3-value, notan) with *Value split*, the luminance where figure turns into sky, and *Squint*, a blur that removes detail.
+ - **Lighting:** sun energy, height (elevation), angle (azimuth) and colour. *Shadow fill* is ambient light, which takes the sky-top colour. Shadows on/off.
+ - **Atmosphere:** horizon/fog colour and sky-top colour (a gradient sky). *Sun glow* is a halo in the sky and scatter in the fog. Depth fog density, ground fog, *Light shafts* (volumetric fog on/off), shaft density, and *Drifting mist* (a volumetric ground mist that only shows while light shafts are on).
+-- **Motion:** *Wind* drives tree and cloth sway, mist drift and mote drift; gusts roll across the forest. Floating motes around the player. The altar ember and the player's lantern always flicker.
++- **Motion:** *Wind* drives tree and cloth sway, grass, mist drift and mote drift; gusts roll across the forest. *Wind direction* is a compass angle in degrees: the way the wind blows *toward*, 0 = toward -Z, 90 = toward +X, clockwise seen from above. Floating motes around the player. The altar ember and the player's lantern always flicker.
+ - **Supernatural:** *Monolith awake* switches the whole effect on/off (off = the hole shows sky again). *Spirits* sets how many wisps flow from the hole down to the altar ember. *Hole glow* scales the glowing core, its halo and the cold spotlight from the hole together; they breathe on a slow 6 s cycle. The spotlight's shaft only shows while *Light shafts* is on.
+-- **Environment:** landmark and props visibility (hidden props still collide). *Forest* switches between **Manual** (the hand-placed forest) and **Procedural** (scatter layers). *Seed* / *New seed*, *Tree density*, *Tree spacing*, *Clumping*, *Rock density*. *Show exclusion zones* draws the scatter masks in the world. The status line reports tree and rock counts after each regeneration.
++- **Environment:** landmark, props and grass visibility (hidden props still collide). *Forest* switches between **Manual** (the hand-placed forest) and **Procedural** (scatter layers). *Seed* / *New seed*, *Tree density*, *Tree spacing*, *Clumping*, *Rock density*. *Show exclusion zones* draws the scatter masks in the world. The status line reports tree and rock counts after each regeneration.
+ - **Presets:** Flat Overcast (the Stage 2 look, kept for before/after comparison), Wide Reveal, Low Silhouette, Golden Backlight, Foggy Forest, Ritual Clearing, Moonlit, Awakened (dusk; the Stage 7 money shot), and Reset (default state plus player back at spawn). Each preset stores only its overrides on top of the default "Cold Dawn" mood; edit them in `scripts/presets.gd`. A preset that switches to a fixed view keeps that view's authored lens. Type a name and press *Save preset* to keep the current settings: only what differs from the default (plus the view) goes into `presets/user_presets.cfg`. Saving with the same name overwrites; to delete a preset, edit that file. It lives under `res://`, so saving works when running from the project folder, never in an exported build.
+ - **Capture:** Screenshot, *All views* (one PNG per viewpoint, same lighting), and *Copy settings*, which copies the current state as text so you can paste it in as a new preset.
+ - **Compare:** *Pin A* (P), *Split* (Z) and *Save pair*, plus a live list of what differs between A and the live scene (B). A and B share the camera, the guides and the value view; a lens is compared only in the view where A was pinned. In split view A is a frozen render that re-renders (a short blink) when the camera stops or the value view changes. *Save pair* writes `screenshots/<stamp>_compare_<view>.png`: A and B side by side with the diff underneath. It also copies an experiment-log row (Date and Changed filled in) to the clipboard.
+ - **Debug:** *Render* mode, the *Value probe* (luminance under the cursor, frame p5/p50/p95 and a histogram with the notan *Value split* marked), the *Perf readout* (fps, CPU/GPU ms, draw calls, primitives) and *Light gizmos* (omni ranges, spot cones, sun direction, drawn through everything). None of these are part of presets, *Copy settings* or A/B. The probe reads the frame back from the GPU four times a second (about 15 ms each), so expect small hitches while it's on.
+ 
+ Colour roles are fixed on purpose:
+ - **Horizon = fog colour.** Distant forms dissolve into the sky behind them, which is what produces atmospheric perspective.
+ - **Sky top = shadow fill.** Shadows are lit by the sky, so they take its cool colour while the sun stays warm. That temperature contrast is most of what makes the scene feel alive.
+ 
+ The **Overview** camera ignores all fog (depth and volumetric) because it is a layout view.
+@@ -104,29 +107,34 @@
+   compare.gd                 A/B compare: pin, hold-to-flip, split capture, saved pairs
+   player/player.gd           CharacterBody3D walker
+   camera/follow_camera.gd    gameplay orbit camera with lens shift
+   camera/viewpoint.gd        fixed cinematic camera + intent note
+   camera/scout_camera.gd     free-fly camera for finding shots
+   effects/flicker_light.gd   noise flicker for fire / lantern lights
+   effects/breathe.gd         slow pulse for the hole glow: core emission + halo + spotlight
+   effects/spirit_stream.gd   @tool: feeds the spirit stream its source/target positions
+   environment/path_ribbon.gd @tool: builds the path mesh from editable points
+   environment/kit_asset.gd   @tool: swaps imported materials for palette materials by name
++  environment/wind.gd        @tool: strength, compass direction and the shared gust field (shader globals)
++  environment/grass_field.gd @tool: painted grass, chunked MultiMesh blades on layer-2 ground
++  environment/grass_brush.gd brush logic shared by the editor painter
+   procedural/scatter.gd      @tool: reproducible scatter layer (seeded, masked, ground-snapped)
+   procedural/exclusion_zone.gd @tool: circle / capsule / box keep-out area with soft edge
+   ui/dev_panel.gd            runtime panel, built in code
+   ui/composition_guides.gd   grids, centre marker, aspect masks
+   ui/compare_view.gd         split-screen overlay with a draggable divider
+   debug/debug_boot.gd        autoload: enables wireframes before any mesh loads
+   debug/value_probe.gd       cursor value, percentiles, histogram
+   debug/perf_hud.gd          fps, CPU/GPU ms, draw calls
+   debug/light_gizmos.gd      light ranges and cones drawn on top
++addons/grass_painter/       the one editor plugin: paints the grass mask (see Grass below)
++tools/make_starter_grass.gd  one-off script that wrote the starter meadow mask
+ presets/user_presets.cfg     saved presets (created on first save; plain text)
+ tests/                       run.gd (runner), case.gd (base), test_*.gd
+ assets/blender/              build_kit.py (procedural kit builder) + environment_kit.blend (git: source)
+ assets/meshes/               exported GLBs (generated by build_kit.py)
+ assets/materials/            flat_color.gdshader (faceted look, wind sway, tint variation) + palette
+ assets/shaders/              value_view (grayscale / 3-value / notan / squint),
+                              gradient_sky (horizon/zenith + sun halo), ground_mist (FogVolume),
+                              spirit_stream (particle path), spirit_wisp, light_halo
+ docs/                        art direction notes and experiment log
+ screenshots/                 captures (git-ignored; .gdignore keeps Godot from importing them)
+@@ -144,20 +152,43 @@
+ 
+ `flat_color.gdshader` sways vertices by `sway × wind × height²`, using world height above the
+ ground. Every part of one object must use the same `sway` value: spruce trunk and foliage share
+ 0.35, and dead trees use 0.2. Otherwise the crown slides off the trunk. Rocks and the ground use 0
+ (rigid). Wind is a global shader parameter (`shader_globals/wind_strength` in Project Settings),
+ set at runtime by the Wind slider.
+ 
+ Performance (RTX 3070, 1600×900): about 850 fps with everything on. Volumetrics cost about
+ 0.13 ms per frame and wind sway about 0.07 ms.
+ 
++## Grass and wind
++
++`Grass` is a `GrassField`: a rectangle of blades driven by a painted mask (R = density, G = height),
++drawn as chunked MultiMeshes with a wind-driven shader. Blades sit on ground found by a ray against
++physics layer 2 (`ground`), so walkable ground needs collision on layers 1 + 2, and a spot with no
++ground gets no blade. The wind comes from the `Wind` node: strength, a compass direction and a gust
++field that travels with it, shared by the grass, trees and cloth. Direction is the angle the wind
++blows **toward**: 0 = toward -Z, 90 = toward +X, clockwise from above (default 53.13: mostly +X with a bit of -Z).
++Gusts show as waves rolling across the meadow.
++
++To repaint, select `Grass` in the editor (the *Grass Painter* plugin must be enabled):
++
++| Input | Action |
++| --- | --- |
++| Left-mouse drag | Paint with the toolbar's mode (Density / Height / Erase), radius, strength and target |
++| Shift + left-mouse drag | Erase (a clearing) |
++| `[` / `]` | Shrink / grow the brush radius |
++| Ctrl+Z | Undo the last stroke (one stroke = one step) |
++
++The mask is saved to its own `.res` at the end of every stroke. The starter meadow is written by
++`tools/make_starter_grass.gd`. Costs and budgets: [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Moving
++this into a game level: [docs/REUSE.md](docs/REUSE.md).
++
+ ## Procedural scattering
+ 
+ `Scatter/Trees` and `Scatter/Rocks` are `Scatter` layers. Each throws seeded candidate points over
+ a rectangle and keeps a point with a probability shaped by:
+ 
+ | Mask | Purpose |
+ | --- | --- |
+ | Clumping noise (`clumping`, `clump_size`) | Groves and gaps instead of an even park |
+ | Path margin + falloff | The path stays walkable and readable |
+ | Far thinning (`far_distance`, `far_keep`) | Dense walls frame the corridor; the deep forest is thinner |
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/docs/EXPERIMENT_LOG.md docs/EXPERIMENT_LOG.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/docs/EXPERIMENT_LOG.md	2026-11-08 12:02:56.947211400 +0800
++++ docs/EXPERIMENT_LOG.md	2026-11-08 12:06:12.114082100 +0800
+@@ -19,20 +19,37 @@
+ | 2026-10-10 | First procedural pass vs manual forest | scatter: density 4.5, spacing 3.4, clumping 0.55 | lights, cameras, hero items | 105 trees, evenly spread: it read as a *park*. The manual forest has dense walls along the path that turn it into a corridor. Random placement doesn't know that rule. |
+ | 2026-10-10 | Teach the generator the corridor rule | far thinning (full density at the path, 50 % by 22 m), density 9, spacing 3.1, clumping 0.45 | everything else | 137 trees. It now frames the path like the manual forest from Reveal and Overview. The remaining difference is the gameplay view: the manual forest has deliberate foreground trees framing the shot, and the scatter doesn't. **Scatter fills space; it doesn't compose frames.** That's why foreground framing stays in `Hero`. |
+ | 2026-10-10 | Where does new content go? | (ASCII occupancy map of the manual forest) | — | The emptiest region (x 20–38, z −12…−36) was the hole flagged in Stage 4. It became the abandoned camp, reached by a side trail. New content should fix a layout problem, not just fill space. |
+ | 2026-10-10 | Does the spirit banner work as a secondary landmark? | banner 14 m → 18 m | trees ≤ 16 m, monolith 26 m | At 14 m it hid below the canopy and wasn't visible from anywhere on the main path. At 18 m it clears the treeline at the fork, above the gate tree. From Reveal it's still lost in the dawn haze, which is acceptable for a *discovered* landmark. Height hierarchy: monolith > banner > trees. |
+ | 2026-10-10 | Do the processional posts read? | khadag cloth 0.2 × 1.1 m dark blue → 0.32 × 1.4 m lighter blue | positions | Small and dark, they read as dead sticks. Larger and lighter, they read as a line of blue markers leading to the clearing. A leading line only works if its elements read at the distance you see them. |
+ | 2026-10-10 | Does the camp story read on arrival? | (observation, Camp view) | Cold Dawn | You arrive from the west looking into the low dawn sun, so the ger, hearth and walls are glare and silhouettes. The banner reads; the details don't. **Open: a Stage 7 lighting decision.** |
+ | 2026-10-12 | Does the spirit stream read as spirits? | first pass: 60 wisps, one Bezier path | lights, cameras | Every wisp rode the same lane at the same pace: a rigid dotted line, like a power cable. Per-wisp lanes, paces and drift turned it into a loose drift. **Regularity reads as machinery; irregularity reads as life.** |
+ | 2026-10-12 | Does the hole read as light from far away? | hole emission 6 → 14 | Awakened, Long Lens | No visible change. The tonemapper flattens the core to a pale flat hexagon, so it reads as paint. Adding a soft halo that ignores depth fog made it read as a light source. Brightness alone doesn't say "light"; light spilling into the air around it does. |
+ | 2026-10-12 | Does the awake monolith fix the Stage 2 notan problem? | (measured, Cold Dawn) | default preset | Hole luminance 0.86 (Forest Gate) / 0.81 (Reveal) vs sky 0.60 and monolith body 0.51–0.58. The landmark now owns the brightest point in the frame, so it separates from the outcrop without changing the fog or sun. |
+ 
++## Stage 9 experiments to run
++
++Use one fixed view per experiment, change one thing, and pair it with Pin A / Z so the diff is explicit.
++
++1. **Across or along?** In Path Low, set *Wind direction* to 90 (across the path), then 0 or 180 (along it). Which
++   makes the waves read as a leading line toward the landmark, and which makes them read as a barrier?
++2. **When does motion become distraction?** In Forest Gate, raise *Wind* from 0.2 in steps of 0.2. Find the strength where
++   you stop noticing the grass and start noticing the *gusts*. Revisit the Stage 3 stillness test: how much motion is
++   atmosphere, and where does it start pulling the eye from the landmark?
++3. **Height as a frame.** Select `Grass`, paint the ring around the landmark with the *Height* brush, tall at the edge and
++   short near the foot. Does the tall grass frame it, or does it just hide the base? Compare against the starter meadow.
++4. **A clearing as a frame.** In Gate Thirds, Shift+LMB a clearing in the foreground meadow. Does the bare ground make
++   a stage for the gate, or a hole in the frame? Move the clearing and see which shot it helps.
++5. **Highlight vs notan.** Change the grass `tip_color` from dark to bright, then press V to switch to notan. At what
++   brightness does the grass stop reading as one dark mass and start competing with the path? Does it still
++   separate from the landmark?
++
+ ## Stage 8 experiments to run
+ 
+ 1. **Redo Stage 7 #1 as a pair.** In Forest Gate, pin A with *Monolith awake* on, switch it off, then *Save pair*. Paste
+    the copied row into the table above and write the Question and Result. Did seeing them side by side change your answer?
+ 2. **Palette or light?** Pick the view you like least. Look at it in *Unshaded*, then *Lighting*. Which one is the problem?
+    Fix only that one, then compare against the original with X.
+ 3. **Read the histogram.** Turn on the value probe in Reveal. Where is the big hump, and how much of the frame sits on
+    each side of the *Value split* line? Move the split until the landmark is on the light side alone.
+ 4. **What does the fog cost?** With the perf readout on, toggle *Light shafts* and *Drifting mist*. Write down the GPU ms
+    each one costs. Is either one worth what it costs in the views where you can barely see it?
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/docs/REUSE.md docs/REUSE.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/snap/docs/REUSE.md	1970-01-01 08:00:00.000000000 +0800
++++ docs/REUSE.md	2026-11-08 12:06:12.034344500 +0800
+@@ -0,0 +1,47 @@
++# Reusing the grass and wind in a game level
++
++Everything the playground adds on top of a plain level is optional. This is the short list of what a
++game project needs from here.
++
++## What to copy
++
++- `scripts/environment/`: `wind.gd`, `grass_field.gd`, `grass_brush.gd`, `kit_asset.gd`
++- `assets/shaders/` (the wind include and grass shader live here) and `assets/materials/`
++- The kit scenes in `scenes/environment/kit/` you actually place
++- `addons/grass_painter/` (the editor brush; the only plugin, and it paints grass masks and nothing else)
++
++After copying, run `Godot --headless --path . --import` once so the new `class_name`s register.
++
++## Project settings
++
++- **Shader globals** (Project Settings > Shader Globals), all three are required, because the
++  materials read them:
++  - `wind_strength`, float, `0.6`
++  - `wind_direction`, vec2, `(0.8, -0.6)`
++  - `wind_offset`, vec2, `(0, 0)`
++- **Physics layer names:** layer 1 = `world`, layer 2 = `ground`.
++- **Plugin:** Project Settings > Plugins > enable *Grass Painter*.
++
++## The ground rule
++
++Grass finds the ground with a ray against **layer 2 only**. Walkable ground therefore needs collision
++on layers **1 + 2** (`collision_layer = 3`). Kit ground pieces (mounds) set `collision = true` so
++they carry it. Anything not on layer 2 (boulders, props) gets no grass on top of it, and a spot with
++no ground below gets no blade.
++
++## A new level in five steps
++
++1. Add a `Wind` node (strength, and direction as a compass angle: 0 = toward -Z, 90 = toward +X).
++2. Add a `GrassField` node.
++3. Set its `extent` (metres, centred on the node) to cover the area you want to paint.
++4. Select the `GrassField`. The Grass Painter toolbar appears in the 3D editor.
++5. Paint: LMB paints, Shift+LMB erases, `[` / `]` change the radius, Ctrl+Z undoes a stroke. Save the
++   mask (it is stored in its own `.res`) with the scene.
++
++## Playground-only parts
++
++Not needed in a game level: the dev panel, presets, Compare, the debug tools (value probe, perf HUD,
++light gizmos), the composition guides, and `tools/` (such as `make_starter_grass.gd`, which only
++writes this playground's starter meadow).
++
++Performance numbers for the grass are in [PERFORMANCE.md](PERFORMANCE.md).

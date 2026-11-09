@@ -1,0 +1,7 @@
+Godot Engine v4.6.stable.mono.official.89cea1439 - https://godotengine.org
+
+PASS test_smoke::test_scene_starts_in_gameplay_view
+PASS test_smoke::test_reset_restores_a_changed_param
+SKIP test_smoke::test_window_check_skips_when_headless (needs a window (run without --headless))
+
+2 passed, 0 failed, 1 skipped

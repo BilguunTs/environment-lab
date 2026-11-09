@@ -1,0 +1,358 @@
+# HC Task 4 review package (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd	2026-11-08 16:32:07.958568100 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 16:33:24.766714400 +0800
+@@ -1,63 +1,110 @@
+ class_name HeavensCall
+ extends Node3D
+ ## "Heavens call": a tired girl climbs a foggy mountain trail to a summit reveal. This root owns
+ ## the level's state and its reset; the trail, mood, sound, vista and summit systems hook in here.
+ 
+ ## Seconds the screen takes to fade in from black at the start.
+ const FADE_IN_SECONDS := 3.0
+ ## She is put back on the trail when she falls this far below the stretch she is over.
+ const FALL_DEPTH := 15.0
++## Metres walked on the floor per footstep (suits 2 m/s).
++const STRIDE := 0.85
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var wind: Wind = $Wind
+ @onready var trail: Trail = $Trail
+ @onready var terrain: MountainTerrain = $MountainTerrain
+ @onready var mood: MoodDirector = $MoodDirector
+ @onready var storm: Storm = $Storm
+ @onready var mist: FogVolume = $Mist
++@onready var soundscape: Soundscape = $Soundscape
+ @onready var _fade: ColorRect = $UI/Fade
+ 
+ ## Furthest progress (0 = foot, 1 = summit) she has reached along the trail. It only ever
+ ## increases, so walking back down or falling never undoes the mood.
+ var furthest_progress := 0.0
+ 
++## Footsteps made since the last reset.
++var step_count := 0
++
+ var _fade_tween: Tween
++var _stride_walked := 0.0
++var _last_pos := Vector3.ZERO
++var _thunder_gen := 0
++var _thunder_pending := 0
+ 
+ 
+ func _ready() -> void:
++	soundscape.attach_footsteps(player)
++	storm.flashed.connect(_on_flashed)
+ 	reset_scene()
+ 
+ 
+ func _process(_delta: float) -> void:
+ 	mood.apply(MoodDirector.sample(furthest_progress))
+ 
+ 
+ func _physics_process(_delta: float) -> void:
+ 	var pos := player.global_position
++	_count_stride(pos - _last_pos, player.is_on_floor())
++	_last_pos = pos
+ 	var progress := trail.progress_at(pos)
+ 	furthest_progress = maxf(furthest_progress, progress)
+ 	if pos.y < trail.point_at(progress).y - FALL_DEPTH:
+ 		respawn()
+ 
+ 
+ ## Puts the girl back at the trail start facing up the trail, restarts the fade-in from black,
+ ## and resets the progress, the mood and the storm (later tasks extend this).
+ func reset_scene() -> void:
+ 	furthest_progress = 0.0
++	_thunder_gen += 1
++	_thunder_pending = 0
++	_stride_walked = 0.0
++	step_count = 0
+ 	storm.reset()
+ 	mood.apply(MoodDirector.sample(0.0))
+ 	_place_on_trail(0.0)
++	_last_pos = player.global_position
+ 	_restart_fade()
+ 
+ 
++## Thunder rolls still waiting for their flash's delay.
++func pending_thunder() -> int:
++	return _thunder_pending
++
++
++## Adds `motion`'s horizontal length to the walked distance while on the floor, and makes a
++## footstep every STRIDE metres.
++func _count_stride(motion: Vector3, on_floor: bool) -> void:
++	if not on_floor:
++		return
++	_stride_walked += Vector2(motion.x, motion.z).length()
++	while _stride_walked >= STRIDE:
++		_stride_walked -= STRIDE
++		step_count += 1
++		var on_trail := trail.distance_to_centre(player.global_position) <= trail.width * 0.5 + 0.5
++		soundscape.step(on_trail)
++
++
++func _on_flashed(delay_s: float) -> void:
++	var gen := _thunder_gen
++	_thunder_pending += 1
++	await get_tree().create_timer(delay_s).timeout
++	if gen != _thunder_gen:
++		return
++	_thunder_pending -= 1
++	soundscape.play_thunder()
++
++
+ ## Puts her back on the trail at the furthest point she reached, at rest.
+ func respawn() -> void:
+ 	_place_on_trail(furthest_progress)
+ 
+ 
+ func _place_on_trail(progress: float) -> void:
+ 	player.global_position = trail.point_at(progress) + Vector3.UP
+ 	player.velocity = Vector3.ZERO
+ 	var ahead := trail.point_at(minf(progress + 2.0 / trail.length(), 1.0)) - trail.point_at(progress)
+ 	if progress >= 1.0:
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/soundscape.gd scripts/levels/soundscape.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/soundscape.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/levels/soundscape.gd	2026-11-08 16:33:12.557768400 +0800
+@@ -0,0 +1,111 @@
++class_name Soundscape
++extends Node
++## The level's sound: wind and eerie loops whose volumes follow the mood, gravel and rock
++## footsteps, and thunder. Never music or jump scares. Every file is optional: a missing one
++## gives a null stream and stays silent, with no error (checked with ResourceLoader.exists).
++
++const DIR := "res://assets/audio/"
++## Volume at linear 0 and below.
++const FLOOR_DB := -60.0
++const DISTANT_COUNT := 3
++const STEP_COUNT := 4
++
++var wind_loop: AudioStreamPlayer
++var wind_strong_loop: AudioStreamPlayer
++var ambience_eerie_loop: AudioStreamPlayer
++## "gravel" or "rock": the kind of the last footstep.
++var last_step_kind := ""
++
++var _steps: AudioStreamPlayer3D
++var _thunder: AudioStreamPlayer
++var _last_step_name := ""
++
++
++func _ready() -> void:
++	wind_loop = _make_loop("wind_loop")
++	wind_strong_loop = _make_loop("wind_strong_loop")
++	ambience_eerie_loop = _make_loop("ambience_eerie_loop")
++	_thunder = AudioStreamPlayer.new()
++	_thunder.name = "Thunder"
++	add_child(_thunder)
++	_steps = AudioStreamPlayer3D.new()
++	_steps.name = "Footsteps"
++	add_child(_steps)
++
++
++## The stream `DIR + name + ".ogg"`, or null when that file isn't there.
++static func load_stream(name: String) -> AudioStream:
++	var path := DIR + name + ".ogg"
++	if not ResourceLoader.exists(path):
++		return null
++	return load(path) as AudioStream
++
++
++## The four file names of a footstep kind ("gravel" or "rock").
++static func step_names(kind: String) -> Array:
++	var out := []
++	for i in STEP_COUNT:
++		out.append("footstep_%s_%d" % [kind, i + 1])
++	return out
++
++
++func loop_players() -> Array[AudioStreamPlayer]:
++	return [wind_loop, wind_strong_loop, ambience_eerie_loop]
++
++
++## Puts the footstep voice on `parent` (the girl) so steps sound from her feet.
++func attach_footsteps(parent: Node3D) -> void:
++	if _steps.get_parent() != parent:
++		_steps.reparent(parent, false)
++	_steps.position = Vector3.ZERO
++
++
++## Loop volumes, 0..1 linear each, mapped to dB with a floor at -60 dB.
++func set_volumes(vol_wind: float, vol_wind_strong: float, vol_eerie: float) -> void:
++	wind_loop.volume_db = _to_db(vol_wind)
++	wind_strong_loop.volume_db = _to_db(vol_wind_strong)
++	ambience_eerie_loop.volume_db = _to_db(vol_eerie)
++
++
++## One distant thunder roll, or the clap.
++func play_thunder(clap := false) -> void:
++	var file := "thunder_clap" if clap else "thunder_distant_%d" % (randi() % DISTANT_COUNT + 1)
++	_play(_thunder, load_stream(file))
++
++
++## One footstep: gravel on the trail, rock off it. Never the same file twice in a row.
++func step(on_trail: bool) -> void:
++	last_step_kind = "gravel" if on_trail else "rock"
++	var names := step_names(last_step_kind)
++	names.erase(_last_step_name)
++	_last_step_name = names[randi() % names.size()]
++	_play(_steps, load_stream(_last_step_name))
++
++
++func _make_loop(file: String) -> AudioStreamPlayer:
++	var p := AudioStreamPlayer.new()
++	p.name = file.to_pascal_case()
++	var s := load_stream(file)
++	if s:
++		s = s.duplicate()
++		if "loop" in s:
++			s.loop = true
++	p.stream = s
++	p.volume_db = FLOOR_DB
++	add_child(p)
++	if s:
++		p.play()
++	return p
++
++
++func _play(p: Node, s: AudioStream) -> void:
++	if s == null:
++		return
++	p.stream = s
++	p.play()
++
++
++static func _to_db(linear: float) -> float:
++	if linear <= 0.0001:
++		return FLOOR_DB
++	return maxf(linear_to_db(linear), FLOOR_DB)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn scenes/levels/heavens_call.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn	2026-11-08 16:32:07.972184700 +0800
++++ scenes/levels/heavens_call.tscn	2026-11-08 16:33:24.925639500 +0800
+@@ -3,20 +3,21 @@
+ [ext_resource type="Script" path="res://scripts/levels/heavens_call.gd" id="1"]
+ [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="2"]
+ [ext_resource type="Script" path="res://scripts/camera/follow_camera.gd" id="3"]
+ [ext_resource type="Script" path="res://scripts/environment/wind.gd" id="4"]
+ [ext_resource type="Shader" path="res://assets/shaders/gradient_sky.gdshader" id="5"]
+ [ext_resource type="Script" path="res://scripts/levels/trail.gd" id="6"]
+ [ext_resource type="Script" path="res://scripts/levels/mountain_terrain.gd" id="7"]
+ [ext_resource type="Script" path="res://scripts/levels/mood_director.gd" id="8"]
+ [ext_resource type="Script" path="res://scripts/levels/storm.gd" id="9"]
+ [ext_resource type="Shader" path="res://assets/shaders/ground_mist.gdshader" id="10"]
++[ext_resource type="Script" path="res://scripts/levels/soundscape.gd" id="11"]
+ 
+ [sub_resource type="ShaderMaterial" id="sky_material"]
+ shader = ExtResource("5")
+ shader_parameter/horizon_color = Color(0.6, 0.62, 0.63, 1)
+ shader_parameter/zenith_color = Color(0.36, 0.42, 0.5, 1)
+ shader_parameter/glow_size = 0.25
+ shader_parameter/glow_energy = 0.48
+ 
+ [sub_resource type="Sky" id="sky"]
+ sky_material = SubResource("sky_material")
+@@ -124,18 +125,22 @@
+ mouse_filter = 2
+ color = Color(0, 0, 0, 1)
+ 
+ [node name="Mist" type="FogVolume" parent="."]
+ size = Vector3(110, 30, 110)
+ material = SubResource("mist_material")
+ 
+ [node name="Storm" type="Node" parent="."]
+ script = ExtResource("9")
+ 
+-[node name="MoodDirector" type="Node" parent="." node_paths=PackedStringArray("wind", "sun", "world_environment", "mist", "storm", "follow")]
++[node name="Soundscape" type="Node" parent="."]
++script = ExtResource("11")
++
++[node name="MoodDirector" type="Node" parent="." node_paths=PackedStringArray("wind", "sun", "world_environment", "mist", "storm", "follow", "soundscape")]
+ script = ExtResource("8")
+ wind = NodePath("../Wind")
+ sun = NodePath("../Sun")
+ world_environment = NodePath("../WorldEnvironment")
+ mist = NodePath("../Mist")
+ storm = NodePath("../Storm")
+ follow = NodePath("../Player")
++soundscape = NodePath("../Soundscape")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_sound.gd tests/test_heavens_sound.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_sound.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_heavens_sound.gd	2026-11-08 16:33:44.669631600 +0800
+@@ -0,0 +1,73 @@
++extends "res://tests/case.gd"
++## Heavens call soundscape: missing audio is silent, footstep kinds, the volume floor, the mood's
++## volumes, thunder after a flash, and footsteps by distance walked.
++
++const SCENE := "res://scenes/levels/heavens_call.tscn"
++
++
++func test_missing_audio_is_silent(lv) -> void:
++	check(Soundscape.load_stream("definitely_missing") == null, "missing file -> null, no error")
++	lv.soundscape.play_thunder()
++	lv.soundscape.play_thunder(true)
++	lv.soundscape.step(true)
++	lv.soundscape.set_volumes(1.0, 1.0, 1.0)
++	check(true, "no engine errors with missing audio")  # the runner fails the test on any engine error
++	for p in lv.soundscape.loop_players():
++		check(not p.playing, "a player without a stream is not playing")
++
++
++func test_footstep_kind_follows_ground(lv) -> void:
++	lv.soundscape.step(true)
++	check_eq(lv.soundscape.last_step_kind, "gravel", "on the trail = gravel")
++	lv.soundscape.step(false)
++	check_eq(lv.soundscape.last_step_kind, "rock", "off the trail = rock")
++
++
++func test_volume_floor(lv) -> void:
++	lv.soundscape.set_volumes(0.0, 0.0, 0.0)
++	for p in lv.soundscape.loop_players():
++		check(p.volume_db <= -60.0, "silent at 0")
++	lv.soundscape.set_volumes(1.0, 1.0, 1.0)
++	for p in lv.soundscape.loop_players():
++		check_near(p.volume_db, 0.0, 0.001, "full at 1")
++
++
++func test_mood_drives_volumes(lv) -> void:
++	lv.furthest_progress = 0.0
++	await frames(2)
++	var wind_db: float = lv.soundscape.wind_loop.volume_db
++	var eerie_db: float = lv.soundscape.ambience_eerie_loop.volume_db
++	check_near(wind_db, linear_to_db(0.7), 0.1, "wind follows the first key")
++	check(eerie_db <= -60.0, "no eerie ambience at the start")
++	lv.furthest_progress = 0.6
++	await frames(2)
++	check(lv.soundscape.ambience_eerie_loop.volume_db > -30.0, "eerie ambience in the eerie stretch")
++
++
++func test_four_distinct_steps_names(_lv) -> void:
++	check_eq(Soundscape.step_names("gravel"), ["footstep_gravel_1", "footstep_gravel_2", "footstep_gravel_3", "footstep_gravel_4"], "gravel names")
++	check_eq(Soundscape.step_names("rock").size(), 4, "rock names")
++
++
++func test_thunder_follows_flash_and_resets(lv) -> void:
++	lv.storm.flash()
++	check_eq(lv.pending_thunder(), 1, "one thunder pending after a flash")
++	lv.reset_scene()
++	check_eq(lv.pending_thunder(), 0, "reset cancels pending thunder")
++	lv.storm.flashed.emit(0.05)
++	await frames(1)
++	check_eq(lv.pending_thunder(), 1, "pending again")
++	await seconds(0.3)
++	check_eq(lv.pending_thunder(), 0, "thunder played")
++
++
++func test_steps_by_distance_on_floor(lv) -> void:
++	await seconds(1.0)  # settle on the ground
++	check(lv.player.is_on_floor(), "grounded")
++	var before: int = lv.step_count
++	lv._count_stride(Vector3(0.9, 0.0, 0.0), true)
++	check_eq(lv.step_count, before + 1, "0.9 m on the floor = one step")
++	lv._count_stride(Vector3(0.4, 5.0, 0.0), true)
++	check_eq(lv.step_count, before + 1, "vertical motion is ignored")
++	lv._count_stride(Vector3(5.0, 0.0, 0.0), false)
++	check_eq(lv.step_count, before + 1, "no steps in the air")
+# new/changed binary or audio files:
+assets/audio/README.md

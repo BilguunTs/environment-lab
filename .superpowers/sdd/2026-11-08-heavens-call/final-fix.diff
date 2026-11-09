@@ -1,0 +1,356 @@
+# Heavens Call final fix wave (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/heavens_call.gd	2026-11-08 18:54:40.166033500 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 18:54:57.223136200 +0800
+@@ -153,22 +153,25 @@
+ 	_fade_tween = create_tween()
+ 	_fade_tween.tween_property(fade, "color:a", 0.0, FADE_IN_SECONDS)
+ 
+ 
+ ## The named capture views, in order.
+ func view_names() -> PackedStringArray:
+ 	return PackedStringArray(VIEWS.keys())
+ 
+ 
+ ## Puts the level in the named view (see VIEWS, plus REVEAL_EARLY), clear of the fade and title,
+-## with the summit sequence frozen where it stands. Callers wait SETTLE_FRAMES to let it settle.
++## with the summit sequence frozen where it stands. An unknown name warns and changes nothing. Callers wait SETTLE_FRAMES to let it settle.
+ func show_view(view_name: String) -> void:
++	if view_name != REVEAL_EARLY and not VIEWS.has(view_name):
++		push_warning("show_view: unknown view '%s'" % view_name)
++		return
+ 	reset_scene()
+ 	stop_fade()
+ 	fade.color.a = 0.0
+ 	if view_name == REVEAL_EARLY:
+ 		summit.skip_to(SummitSequence.Phase.REVEAL)
+ 		summit.scrub(REVEAL_EARLY_SECONDS)
+ 		vista.reveal = 0.15
+ 	elif VIEWS.get(view_name, -1.0) < 0.0:
+ 		summit.skip_to(SummitSequence.Phase.PULLBACK)
+ 		summit.scrub(SummitSequence.PULLBACK_SECONDS)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/soundscape.gd scripts/levels/soundscape.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/soundscape.gd	2026-11-08 18:54:40.171218800 +0800
++++ scripts/levels/soundscape.gd	2026-11-08 18:54:57.223136200 +0800
+@@ -11,30 +11,35 @@
+ const STEP_COUNT := 4
+ 
+ var wind_loop: AudioStreamPlayer
+ var wind_strong_loop: AudioStreamPlayer
+ var ambience_eerie_loop: AudioStreamPlayer
+ ## "gravel" or "rock": the kind of the last footstep.
+ var last_step_kind := ""
+ 
+ var _steps: AudioStreamPlayer3D
+ var _thunder: AudioStreamPlayer
++## The clap has its own voice, so a late distant roll can't cut it off.
++var _clap: AudioStreamPlayer
+ var _last_step_name := ""
+ 
+ 
+ func _ready() -> void:
+ 	wind_loop = _make_loop("wind_loop")
+ 	wind_strong_loop = _make_loop("wind_strong_loop")
+ 	ambience_eerie_loop = _make_loop("ambience_eerie_loop")
+ 	_thunder = AudioStreamPlayer.new()
+ 	_thunder.name = "Thunder"
+ 	add_child(_thunder)
++	_clap = AudioStreamPlayer.new()
++	_clap.name = "Clap"
++	add_child(_clap)
+ 	_steps = AudioStreamPlayer3D.new()
+ 	_steps.name = "Footsteps"
+ 	add_child(_steps)
+ 
+ 
+ ## The stream `DIR + name + ".ogg"`, or null when that file isn't there.
+ static func load_stream(name: String) -> AudioStream:
+ 	var path := DIR + name + ".ogg"
+ 	if not ResourceLoader.exists(path):
+ 		return null
+@@ -60,44 +65,47 @@
+ 	_steps.position = Vector3.ZERO
+ 
+ 
+ ## Loop volumes, 0..1 linear each, mapped to dB with a floor at -60 dB.
+ func set_volumes(vol_wind: float, vol_wind_strong: float, vol_eerie: float) -> void:
+ 	wind_loop.volume_db = _to_db(vol_wind)
+ 	wind_strong_loop.volume_db = _to_db(vol_wind_strong)
+ 	ambience_eerie_loop.volume_db = _to_db(vol_eerie)
+ 
+ 
+-## One distant thunder roll, or the clap.
+-func play_thunder(clap := false) -> void:
+-	var file := "thunder_clap" if clap else "thunder_distant_%d" % (randi() % DISTANT_COUNT + 1)
+-	_play(_thunder, load_stream(file))
++## One distant thunder roll, or the clap (on its own player). `file` overrides the file name
++## (test seam: a nonexistent name must stay silent).
++func play_thunder(clap := false, file := "") -> void:
++	if file == "":
++		file = "thunder_clap" if clap else "thunder_distant_%d" % (randi() % DISTANT_COUNT + 1)
++	_play(_clap if clap else _thunder, load_stream(file))
+ 
+ 
+ ## Cuts off any thunder roll or clap and footstep still sounding (the level's reset).
+ func stop_one_shots() -> void:
+ 	_thunder.stop()
++	_clap.stop()
+ 	_steps.stop()
+ 
+ 
+ ## Whether a thunder roll or the clap is sounding.
+ func thunder_playing() -> bool:
+-	return _thunder.playing
++	return _thunder.playing or _clap.playing
+ 
+ 
+ ## One footstep: gravel on the trail, rock off it. Never the same file twice in a row.
+-func step(on_trail: bool) -> void:
++func step(on_trail: bool, file := "") -> void:
+ 	last_step_kind = "gravel" if on_trail else "rock"
+ 	var names := step_names(last_step_kind)
+ 	names.erase(_last_step_name)
+ 	_last_step_name = names[randi() % names.size()]
+-	_play(_steps, load_stream(_last_step_name))
++	_play(_steps, load_stream(file if file != "" else _last_step_name))
+ 
+ 
+ func _make_loop(file: String) -> AudioStreamPlayer:
+ 	var p := AudioStreamPlayer.new()
+ 	p.name = file.to_pascal_case()
+ 	var s := load_stream(file)
+ 	if s:
+ 		s = s.duplicate()
+ 		if "loop" in s:
+ 			s.loop = true
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/summit_sequence.gd scripts/levels/summit_sequence.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/levels/summit_sequence.gd	2026-11-08 18:54:40.173223800 +0800
++++ scripts/levels/summit_sequence.gd	2026-11-08 18:56:34.053224400 +0800
+@@ -145,20 +145,21 @@
+ 	elif p > Phase.PULLBACK:
+ 		_place_pull(1.0)
+ 	phase = p
+ 	_t = 0.0
+ 
+ 
+ ## Back to IDLE: gameplay camera, control and orbit given back, surge off, title hidden. (The
+ ## level's reset_scene calls this and also closes the vista and restarts the fade-in.)
+ func reset() -> void:
+ 	set_process(true)
++	set_physics_process(true)
+ 	phase = Phase.IDLE
+ 	_t = 0.0
+ 	input_armed = false
+ 	clap_played = false
+ 	_restore_accel()
+ 	if level == null:
+ 		return
+ 	level.player.input_enabled = true
+ 	level.follow_cam.input_enabled = true
+ 	level.follow_cam.orbit_locked = false
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_sound.gd tests/test_heavens_sound.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_sound.gd	2026-11-08 18:54:40.213857800 +0800
++++ tests/test_heavens_sound.gd	2026-11-08 18:55:14.445590200 +0800
+@@ -9,20 +9,53 @@
+ 	check(Soundscape.load_stream("definitely_missing") == null, "missing file -> null, no error")
+ 	lv.soundscape.play_thunder()
+ 	lv.soundscape.play_thunder(true)
+ 	lv.soundscape.step(true)
+ 	lv.soundscape.set_volumes(1.0, 1.0, 1.0)
+ 	check(true, "no engine errors with missing audio")  # the runner fails the test on any engine error
+ 	for p in lv.soundscape.loop_players():
+ 		check(p.playing == (p.stream != null), "a player plays exactly when it has a stream (missing file = silent)")
+ 
+ 
++## The null-stream branches, driven with a name that has no file: nothing plays, nothing errors.
++func test_missing_file_paths_stay_silent(lv) -> void:
++	var sc: Soundscape = lv.soundscape
++	sc.stop_one_shots()
++	sc.play_thunder(false, "definitely_missing")
++	sc.play_thunder(true, "definitely_missing")
++	sc.step(true, "definitely_missing")
++	sc.step(false, "definitely_missing")
++	var loop := sc._make_loop("definitely_missing")
++	check(loop.stream == null, "the loop has a null stream")
++	check(not loop.playing, "the loop is not playing")
++	loop.free()
++	check(not sc.thunder_playing(), "no thunder sounding")
++	check(sc.get_node("Thunder").stream == null or not sc.get_node("Thunder").playing, "roll player idle")
++	check(not sc.get_node("Clap").playing, "clap player idle")
++	var steps: AudioStreamPlayer3D = sc.get_node_or_null("Footsteps")
++	if steps == null:
++		steps = lv.player.get_node_or_null("Footsteps")
++	check(steps != null and not steps.playing, "footstep voice idle")
++
++
++## The clap has its own player: a distant roll after it doesn't cut it off.
++func test_clap_survives_a_roll(lv) -> void:
++	var clap: AudioStreamPlayer = lv.soundscape.get_node("Clap")
++	clap.stream = AudioStreamGenerator.new()
++	clap.play()
++	lv.soundscape.play_thunder(false)
++	check(clap.playing, "the clap keeps sounding when a roll starts")
++	lv.soundscape.stop_one_shots()
++	check(not clap.playing, "stop_one_shots stops the clap too")
++	clap.stream = null
++
++
+ func test_footstep_kind_follows_ground(lv) -> void:
+ 	lv.soundscape.step(true)
+ 	check_eq(lv.soundscape.last_step_kind, "gravel", "on the trail = gravel")
+ 	lv.soundscape.step(false)
+ 	check_eq(lv.soundscape.last_step_kind, "rock", "off the trail = rock")
+ 
+ 
+ func test_volume_floor(lv) -> void:
+ 	lv.soundscape.set_volumes(0.0, 0.0, 0.0)
+ 	for p in lv.soundscape.loop_players():
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_summit.gd tests/test_heavens_summit.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_summit.gd	2026-11-08 18:54:40.223455000 +0800
++++ tests/test_heavens_summit.gd	2026-11-08 18:55:14.445590200 +0800
+@@ -59,20 +59,75 @@
+ 	Input.parse_input_event(key)
+ 	await frames(2)
+ 	check(quit[0], "a key after the title finishes")
+ 	var release := InputEventKey.new()
+ 	release.keycode = KEY_SPACE
+ 	release.pressed = false
+ 	Input.parse_input_event(release)  # leave no key held for later tests
+ 	await frames(1)
+ 
+ 
++## The ending on its natural path, stepped by hand (the sequence's own processing is frozen so
++## real frames don't double-step): the phases come in order, the clap sounds in REVEAL, the fade
++## reaches black, and input stays unarmed through FADE and the title's fade-in. Only then does a
++## mouse button finish.
++func test_natural_path_to_title(lv) -> void:
++	var finished := [0]
++	_on_finished = func() -> void: finished[0] += 1
++	lv.summit.finished.connect(_on_finished)
++	_freeze(lv)
++	lv.summit.start()
++	var seen: Array = [lv.summit.phase]
++	var key := InputEventKey.new()
++	key.keycode = KEY_SPACE
++	key.pressed = true
++	var sent_in_fade := false
++	var sent_in_title := false
++	var clap_after_reveal := false
++	var armed_early := false
++	var title_ticks := 0
++	for i in 400:  # 100 s of sequence time at most
++		var before: int = lv.summit.phase
++		lv.summit._process(0.25)
++		var ph: int = lv.summit.phase
++		if ph != seen[-1]:
++			seen.append(ph)
++			if before == SummitSequence.Phase.REVEAL:
++				clap_after_reveal = lv.summit.clap_played
++		if ph == SummitSequence.Phase.FADE and not sent_in_fade:
++			sent_in_fade = true
++			lv.summit._input(key)
++		if ph == SummitSequence.Phase.TITLE:
++			title_ticks += 1
++			if lv.summit.input_armed:
++				break
++			armed_early = armed_early or lv.summit.input_armed
++			if title_ticks == 3:  # 0.75 s in: the title is still fading in
++				sent_in_title = true
++				lv.summit._input(key)
++	check_eq(seen, [SummitSequence.Phase.SLOWING, SummitSequence.Phase.REVEAL, SummitSequence.Phase.PULLBACK, SummitSequence.Phase.FADE, SummitSequence.Phase.TITLE], "phases in order")
++	check(clap_after_reveal, "the clap sounded during REVEAL")
++	check(sent_in_fade and sent_in_title, "keys were sent in FADE and in the title fade-in")
++	check(lv.get_node("UI/Fade").color.a > 0.99, "black once at the title")
++	check(not armed_early, "not armed at the start of TITLE")
++	check(title_ticks >= int(SummitSequence.TITLE_FADE_SECONDS / 0.25), "armed only after the title fade-in (%d ticks)" % title_ticks)
++	check(lv.summit.input_armed, "armed once the title is fully shown")
++	check_eq(lv.get_node("UI/Title").modulate.a, 1.0, "title fully shown when armed")
++	check_eq(finished[0], 0, "keys during FADE and the title fade-in did not finish")
++	var click := InputEventMouseButton.new()
++	click.button_index = MOUSE_BUTTON_LEFT
++	click.pressed = true
++	lv.summit._input(click)
++	check_eq(finished[0], 1, "a mouse button after arming finishes")
++	check(not lv.summit.input_armed, "disarmed after finishing")
++
++
+ func test_pullback_makes_her_tiny(lv) -> void:
+ 	if not needs_window(): return
+ 	lv.summit.skip_to(SummitSequence.Phase.PULLBACK)
+ 	await seconds(12.5)
+ 	var cam: Camera3D = lv.get_viewport().get_camera_3d()
+ 	var top: Vector2 = cam.unproject_position(lv.player.global_position + Vector3.UP * 1.7)
+ 	var foot: Vector2 = cam.unproject_position(lv.player.global_position)
+ 	check(absf(foot.y - top.y) < lv.get_viewport().get_visible_rect().size.y * 0.03, "tiny silhouette")
+ 
+ 
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/docs/HEAVENS_CALL.md docs/HEAVENS_CALL.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/docs/HEAVENS_CALL.md	2026-11-08 18:54:40.289927200 +0800
++++ docs/HEAVENS_CALL.md	2026-11-08 18:55:00.604034700 +0800
+@@ -43,30 +43,30 @@
+ | eerie | progress 0.72 |
+ | summit | progress 0.96 |
+ | wide | the summit sequence at the end of PULLBACK (vista fully open) |
+ | reveal_early | profile only: REVEAL with the vista's `reveal` at 0.15, when the far ridges and steppe draw as transparent while fading in |
+ 
+ ## Profile (1920x1080, RTX 3070, vsync off, `--no-wireframes`)
+ 
+ Budget: 7.0 ms GPU in the worst view. The Grass column is always "on" (the level has no grass
+ toggle). The FPS column is a stale 1 s monitor; trust the milliseconds.
+ 
+-| View | FPS | CPU ms | GPU ms | Draws | Prims |
+-|---|---:|---:|---:|---:|---:|
+-| foot | 103 | 0.17 | 1.60 | 49 | 587k |
+-| debris | 103 | 0.22 | 1.51 | 184 | 601k |
+-| eerie | 377 | 0.21 | 1.44 | 162 | 602k |
+-| summit | 377 | 0.19 | 1.48 | 95 | 663k |
+-| wide | 377 | 0.20 | 1.72 | 62 | 606k |
+-| reveal_early | 401 | 0.20 | 2.04 | 67 | 685k |
++| View | Grass | FPS | CPU ms | GPU ms | Draws | Prims |
++|---|---|---:|---:|---:|---:|---:|
++| foot | on | 1 | 0.17 | 1.62 | 48 | 587k |
++| debris | on | 90 | 0.21 | 1.51 | 184 | 601k |
++| eerie | on | 261 | 0.21 | 1.45 | 162 | 602k |
++| summit | on | 261 | 0.19 | 1.48 | 95 | 659k |
++| wide | on | 261 | 0.20 | 1.70 | 62 | 606k |
++| reveal_early | on | 429 | 0.20 | 1.98 | 67 | 680k |
+ 
+-Worst view: reveal_early at 2.04 ms, about 5 ms under budget. No cost reductions were needed.
++Worst view: reveal_early at 1.98 ms, about 5 ms under budget. No cost reductions were needed.
+ 
+ ## Audio
+ 
+ All 15 `.ogg` files are shipped in `assets/audio/` (wind, strong wind, eerie ambience, 4 gravel and
+ 4 rock footsteps, 3 distant thunders, thunder clap). Sources and licences are in
+ `assets/audio/CREDITS.md`. A missing file is silent, never an error.
+ 
+ ## Manual checks (for you)
+ 
+ 1. Play the whole climb once and time it. Target 5-7 minutes (the trail length / 2.0 m/s).
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/docs/REUSE.md docs/REUSE.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/docs/REUSE.md	2026-11-08 18:54:40.292926000 +0800
++++ docs/REUSE.md	2026-11-08 18:54:57.224136800 +0800
+@@ -58,21 +58,21 @@
+ 
+ ## Fog, mist and sky
+ 
+ Heavens call copied these from `scenes/playground.tscn` into `scenes/levels/heavens_call.tscn`.
+ Open either scene and copy the nodes and sub-resources; nothing here needs code.
+ 
+ - **`WorldEnvironment`**: `background_mode = Sky` with a `Sky` whose material is a `ShaderMaterial`
+   on `gradient_sky.gdshader` (`horizon_color`, `zenith_color`, `glow_size`, `glow_energy`). Keep
+   the roles: horizon colour = fog colour (`fog_light_color`, `background_color`), zenith colour =
+   `ambient_light_color` (ambient from colour, `ambient_light_source = 2`). Other settings:
+-  Filmic/ACES-style tonemap (`tonemap_mode = 4`), SSAO and glow on, depth fog (`fog_density`,
++  AgX tonemap (`tonemap_mode = 4`), SSAO and glow on, depth fog (`fog_density`,
+   `fog_aerial_perspective`, `fog_sky_affect`, a thin `fog_height` layer), and volumetric fog
+   (`volumetric_fog_enabled`, `density`, `albedo`, `anisotropy`, `length`, `ambient_inject`,
+   `sky_affect = 0`). Without volumetric fog enabled the mist below draws nothing.
+ - **`Mist`**: a `FogVolume` (the level uses 110 x 30 x 110 m) whose material is a `ShaderMaterial` on
+   `ground_mist.gdshader` with a seamless `NoiseTexture3D` as `noise_tex`. Uniforms: `density`,
+   `mist_height` (how far above the base it thins out), `base_height` (world y it is thickest at and
+   below; 0 = the playground's flat ground), `noise_scale`, `offset` and `albedo`.
+ - **Following the player up a slope.** The volume is finite, so a script keeps it centred on the
+   player and sets `base_height` to a little below her feet every frame, which lets the mist climb a
+   mountain with her. `scripts/levels/mood_director.gd` does this for the level.
+# new/changed binary or audio files:

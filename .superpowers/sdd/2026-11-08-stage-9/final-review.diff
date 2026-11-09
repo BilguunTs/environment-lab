@@ -1,0 +1,3036 @@
+# Stage 9 whole-branch review package: diff -ruN --strip-trailing-cr from the pre-Stage-9 baseline to the current tree (line-ending normalisation not shown). New dirs: addons/, tools/, assets/shaders/ grass files, assets/grass/ (binary mask, not shown).
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/compare.gd scripts/compare.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/compare.gd	2026-11-08 11:21:39.274769600 +0800
++++ scripts/compare.gd	2026-11-08 11:59:28.285917700 +0800
+@@ -191,22 +191,23 @@
+ 
+ ## Re-renders the frozen A image for split view. Costs a SETTLE_FRAMES blink.
+ func capture_a() -> void:
+ 	if busy or not has_a():
+ 		return
+ 	busy = true
+ 	_dirty = false  # anything that re-dirties during the capture triggers another one
+ 	var b := compare_state()
+-	a_image = await render_state(_a_here())
+-	_apply(b)
++	# Sampled before the blink: a move during it must still differ afterwards and recapture.
+ 	var cam := get_viewport().get_camera_3d()
+ 	if cam:
+ 		_last_cam = cam.global_transform
+ 		_last_fov = cam.fov
++	a_image = await render_state(_a_here())
++	_apply(b)
+ 	_end_busy()
+ 	changed.emit()
+ 
+ 
+ func _end_busy() -> void:
+ 	busy = false
+ 	if _release_pending:
+ 		_release_pending = false
+@@ -252,23 +253,33 @@
+ 	var lines := diff_between(a, b)
+ 	var image_a := await render_state(a)
+ 	var image_b := await render_state(b)
+ 	_end_busy()
+ 	var view_name: String = pg.get_param("view")
+ 	var header := "%s · %s · A (left) vs B (right)" % [Time.get_datetime_string_from_system(false, true), view_name]
+ 	var sheet := await compose(image_a, image_b, header, lines)
+ 	var path: String = pg.screenshot_path("compare_" + view_name)
+-	sheet.save_png(path)
++	var error := save_sheet(sheet, path)
++	if error != "":
++		pg.panel.notify(error)
++		changed.emit()
++		return ""
+ 	DisplayServer.clipboard_set(log_row(lines))
+ 	pg.panel.notify("Saved %s (log row copied)" % path.get_file())
+ 	changed.emit()
+ 	return path
+ 
+ 
++## Saves the sheet as PNG. Returns "" on success, otherwise a message for the status line.
++static func save_sheet(image: Image, path: String) -> String:
++	var err := image.save_png(path)
++	return "" if err == OK else "Could not save %s (error %d)" % [path.get_file(), err]
++
++
+ ## An EXPERIMENT_LOG.md row with Date and Changed filled in; Question, Fixed and Result are yours.
+ static func log_row(lines: Array[String]) -> String:
+ 	var changed_text := ", ".join(PackedStringArray(lines)) if not lines.is_empty() else "(nothing)"
+ 	return "| %s | | %s | | |" % [Time.get_date_string_from_system(), changed_text]
+ 
+ 
+ ## Two frames side by side with a text strip below. Godot's Image can't draw text, so this lays
+ ## the pieces out in a temporary 2D SubViewport and grabs its frame.
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/debug/debug_boot.gd scripts/debug/debug_boot.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/debug/debug_boot.gd	2026-11-08 11:21:39.277395800 +0800
++++ scripts/debug/debug_boot.gd	2026-11-08 11:53:56.499594400 +0800
+@@ -1,7 +1,9 @@
+ extends Node
+ ## Autoload. Wireframe debug draw only works for meshes created after this flag is set, so it
+-## has to run before the main scene loads.
++## has to run before the main scene loads. `--no-wireframes` (user args) skips it, for profiling.
+ 
+ 
+ func _init() -> void:
++	if "--no-wireframes" in OS.get_cmdline_user_args():
++		return
+ 	RenderingServer.set_debug_generate_wireframes(true)
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/debug/light_gizmos.gd scripts/debug/light_gizmos.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/debug/light_gizmos.gd	2026-11-08 11:21:39.281073500 +0800
++++ scripts/debug/light_gizmos.gd	2026-11-08 11:59:28.338042100 +0800
+@@ -56,25 +56,38 @@
+ 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+ 	var material := StandardMaterial3D.new()
+ 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+ 	material.vertex_color_use_as_albedo = true
+ 	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA  # drawn after opaque geometry
+ 	material.no_depth_test = true
+ 	material_override = material
+ 	visible = false
++	add_to_group("overlay")  # captures hide it
+ 	visibility_changed.connect(_on_visibility_changed)
++	get_tree().node_added.connect(_on_node_added)
++	get_tree().node_removed.connect(_on_node_removed)
+ 
+ 
+ func _on_visibility_changed() -> void:
+ 	if visible:
+ 		_lights.assign(pg.find_children("*", "Light3D", true, false))
+ 	_rebuild()
+ 
+ 
++func _on_node_added(node: Node) -> void:
++	if visible and node is Light3D and pg.is_ancestor_of(node) and not _lights.has(node):
++		_lights.append(node)
++
++
++func _on_node_removed(node: Node) -> void:
++	if node is Light3D:
++		_lights.erase(node)
++
++
+ func _process(_delta: float) -> void:
+ 	if visible:
+ 		_rebuild()
+ 
+ 
+ func _rebuild() -> void:
+ 	_mesh.clear_surfaces()
+ 	if not visible:
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/debug/perf_hud.gd scripts/debug/perf_hud.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/debug/perf_hud.gd	2026-11-08 11:21:39.280142700 +0800
++++ scripts/debug/perf_hud.gd	2026-11-08 12:00:45.902617400 +0800
+@@ -14,32 +14,44 @@
+ 
+ static func format(fps: float, cpu_ms: float, gpu_ms: float, draw_calls: int, primitives: int, probe_on: bool) -> String:
+ 	var text := "%d fps   CPU %.2f ms   GPU %.2f ms\n%d draws   %s prims" % [roundi(fps), cpu_ms, gpu_ms, draw_calls, _short(primitives)]
+ 	if probe_on:
+ 		text += "\nprobe on: its readback adds a few ms every 0.25 s"
+ 	return text
+ 
+ 
++## A Markdown table, one row per {view, grass, fps, cpu_ms, gpu_ms, draws, prims}.
++static func table(rows: Array[Dictionary]) -> String:
++	var lines := PackedStringArray([
++		"| View | Grass | FPS | CPU ms | GPU ms | Draws | Prims |",
++		"|---|---|---:|---:|---:|---:|---:|",
++	])
++	for r in rows:
++		lines.append("| %s | %s | %d | %.2f | %.2f | %d | %s |" % [r.view, "on" if r.grass else "off", roundi(r.fps),
++			r.cpu_ms, r.gpu_ms, r.draws, _short(int(r.prims))])
++	return "\n".join(lines) + "\n"
++
++
+ static func _short(n: int) -> String:
+ 	if n >= 1_000_000:
+ 		return "%.1fM" % (n / 1_000_000.0)
+ 	if n >= 1000:
+ 		return "%dk" % roundi(n / 1000.0)
+ 	return str(n)
+ 
+ 
+ func _ready() -> void:
+ 	add_to_group("overlay")
+ 	mouse_filter = MOUSE_FILTER_IGNORE
+ 	set_anchors_and_offsets_preset(PRESET_TOP_RIGHT)
+ 	grow_horizontal = GROW_DIRECTION_BEGIN
+ 	offset_left = -440
+ 	offset_right = -16
+-	offset_top = 64  # under the two-line view HUD
++	offset_top = 64  # until the first update places it under the view HUD
+ 	horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+ 	add_theme_font_size_override("font_size", 12)
+ 	add_theme_color_override("font_color", Color(0.75, 1.0, 0.75, 0.9))
+ 	add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
+ 	add_theme_constant_override("outline_size", 4)
+ 	visible = false
+ 	visibility_changed.connect(_on_visibility_changed)
+ 
+@@ -54,20 +66,47 @@
+ 	_frames = 0
+ 	_cpu = 0.0
+ 	_gpu = 0.0
+ 
+ 
+ func _process(delta: float) -> void:
+ 	if not visible:
+ 		return
++	var view_hud: Control = pg._hud
++	if view_hud:  # the view HUD's height changes with its intent text and the window width
++		offset_top = view_hud.position.y + maxf(view_hud.size.y, view_hud.get_combined_minimum_size().y) + 8.0
+ 	var rid := get_viewport().get_viewport_rid()
+ 	# Work only: TIME_PROCESS would be the whole frame, vsync wait included.
+ 	_cpu += RenderingServer.viewport_get_measured_render_time_cpu(rid) + RenderingServer.get_frame_setup_time_cpu()
+ 	_gpu += RenderingServer.viewport_get_measured_render_time_gpu(rid)
+ 	_frames += 1
+ 	_timer += delta
+ 	if _timer < INTERVAL:
+ 		return
+ 	text = format(Performance.get_monitor(Performance.TIME_FPS), _cpu / _frames, _gpu / _frames,
+ 		int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+ 		int(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)), pg.get_param("probe"))
+ 	_reset()
++
++
++## Averages fps, CPU/GPU ms, draws and prims over frame_count frames, with the same sources as the
++## readout. Turns render-time measuring on for the duration and restores it afterwards.
++func measure(frame_count: int) -> Dictionary:
++	var rid := get_viewport().get_viewport_rid()
++	RenderingServer.viewport_set_measure_render_time(rid, true)
++	for _f in 2:  # the first measured frames are not yet valid
++		await get_tree().process_frame
++	var cpu := 0.0
++	var gpu := 0.0
++	var fps := 0.0
++	var draws := 0.0
++	var prims := 0.0
++	for _f in frame_count:
++		await get_tree().process_frame
++		cpu += RenderingServer.viewport_get_measured_render_time_cpu(rid) + RenderingServer.get_frame_setup_time_cpu()
++		gpu += RenderingServer.viewport_get_measured_render_time_gpu(rid)
++		fps += Performance.get_monitor(Performance.TIME_FPS)
++		draws += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
++		prims += Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
++	RenderingServer.viewport_set_measure_render_time(rid, visible)
++	var n := float(maxi(frame_count, 1))
++	return {"fps": fps / n, "cpu_ms": cpu / n, "gpu_ms": gpu / n, "draws": int(draws / n), "prims": int(prims / n)}
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/debug/value_probe.gd scripts/debug/value_probe.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/debug/value_probe.gd	2026-11-08 11:21:39.281073500 +0800
++++ scripts/debug/value_probe.gd	2026-11-08 12:00:33.963875400 +0800
+@@ -17,37 +17,63 @@
+ var _timer := 0.0
+ 
+ 
+ static func luminance(c: Color) -> float:
+ 	return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b
+ 
+ 
+ ## Percentiles and histogram of `image`, skipping pixels inside `exclude` (image pixel space).
++## Reads the raw bytes and walks each row as runs between the excluded x-spans.
+ static func measure(image: Image, exclude: Array[Rect2] = []) -> Dictionary:
+ 	var hist := PackedInt32Array()
+ 	hist.resize(BINS)
++	var source := image
++	if source.get_format() != Image.FORMAT_RGB8 and source.get_format() != Image.FORMAT_RGBA8:
++		source = image.duplicate()
++		source.convert(Image.FORMAT_RGBA8)
++	var width := source.get_width()
++	var height := source.get_height()
++	var bpp := 3 if source.get_format() == Image.FORMAT_RGB8 else 4
++	var data := source.get_data()
++	var lr := PackedFloat64Array()
++	var lg := PackedFloat64Array()
++	var lb := PackedFloat64Array()
++	for i in 256:
++		lr.append(0.2126 * i / 255.0)
++		lg.append(0.7152 * i / 255.0)
++		lb.append(0.0722 * i / 255.0)
+ 	var values := PackedFloat32Array()
+-	for y in image.get_height():
+-		for x in image.get_width():
+-			var p := Vector2(x + 0.5, y + 0.5)
+-			var skip := false
+-			for r in exclude:
+-				if r.has_point(p):
+-					skip = true
+-					break
+-			if skip:
+-				continue
+-			var v := clampf(luminance(image.get_pixel(x, y)), 0.0, 1.0)
+-			values.append(v)
+-			hist[mini(int(v * BINS), BINS - 1)] += 1
+-	if values.is_empty():
++	values.resize(width * height)
++	var count := 0
++	for y in height:
++		# Pixel centres inside a rect, as Rect2.has_point(Vector2(x + 0.5, y + 0.5)) would say.
++		var spans: Array[Vector2i] = []
++		for r in exclude:
++			if y + 0.5 >= r.position.y and y + 0.5 < r.end.y:
++				var x0 := clampi(ceili(r.position.x - 0.5), 0, width)
++				var x1 := clampi(ceili(r.end.x - 0.5), 0, width)
++				if x1 > x0:
++					spans.append(Vector2i(x0, x1))
++		spans.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.x < b.x)
++		spans.append(Vector2i(width, width))  # sentinel: the run after the last span
++		var cursor := 0
++		for span in spans:
++			for x in range(cursor, span.x):
++				var i := (y * width + x) * bpp
++				var v := minf(lr[data[i]] + lg[data[i + 1]] + lb[data[i + 2]], 1.0)
++				values[count] = v
++				count += 1
++				hist[mini(int(v * BINS), BINS - 1)] += 1
++			cursor = maxi(cursor, span.y)
++	if count == 0:
+ 		return {"p5": 0.0, "p50": 0.0, "p95": 0.0, "hist": hist}
++	values.resize(count)
+ 	values.sort()
+-	var n := values.size()
++	var n := count
+ 	return {
+ 		"p5": values[mini(int(0.05 * n), n - 1)],
+ 		"p50": values[mini(int(0.5 * n), n - 1)],
+ 		"p95": values[mini(int(0.95 * n), n - 1)],
+ 		"hist": hist,
+ 	}
+ 
+ 
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/grass_brush.gd scripts/environment/grass_brush.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/grass_brush.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/environment/grass_brush.gd	2026-11-08 11:45:37.457967400 +0800
+@@ -0,0 +1,72 @@
++class_name GrassBrush
++extends RefCounted
++## One brush stroke on a GrassField's mask: begin() snapshots the mask, dab() paints a disc and
++## rebuilds only the chunks it touched, end() hands back the [before, after] pair for undo.
++##
++## Holds the testable logic of the grass painter (addons/grass_painter), which is glue only.
++
++var mode := GrassField.PaintMode.DENSITY
++## Brush radius in metres.
++var radius := 3.0
++## How far one dab moves a texel toward the target (0..1).
++var strength := 0.3
++## Density or height the brush paints toward (0..1); ignored when erasing.
++var target := 1.0
++## Fraction of the radius over which the dab fades out at its rim.
++var falloff := 0.5
++
++const RAY_LENGTH := 2000.0
++
++var _field: GrassField
++var _before: Image
++var _last_dab := Vector3.INF
++
++
++## Starts a stroke on `field`, remembering its mask for undo.
++func begin(field: GrassField) -> void:
++	_field = field
++	field.ensure_mask()
++	_before = field.mask.duplicate()
++	_last_dab = Vector3.INF
++
++
++## Paints one dab at `world_pos`. Skipped if it is within radius * 0.25 of the stroke's last
++## dab, so a slow drag doesn't pile dabs on one spot.
++func dab(world_pos: Vector3) -> void:
++	if _field == null or not is_instance_valid(_field):
++		return
++	if _last_dab != Vector3.INF and world_pos.distance_to(_last_dab) < radius * 0.25:
++		return
++	_last_dab = world_pos
++	var rect := _field.paint(world_pos, radius, mode, target, strength, falloff)
++	if rect.has_area():  # an empty rect would mean "rebuild everything"
++		_field.rebuild(rect)
++
++
++## True between begin() and end().
++func is_painting() -> bool:
++	return _field != null
++
++
++## Ends the stroke and returns [before, after] copies of the mask; empty if no stroke was open.
++func end() -> Array[Image]:
++	var pair: Array[Image] = []
++	if _field != null and is_instance_valid(_field) and _before != null:
++		pair = [_before, _field.mask.duplicate()]
++	_field = null
++	_before = null
++	_last_dab = Vector3.INF
++	return pair
++
++
++## Where a ray from `from` along `dir` hits `field.ground_layer`, or null.
++static func ray_to_ground(field: GrassField, from: Vector3, dir: Vector3) -> Variant:
++	if not field.is_inside_tree() or dir.is_zero_approx():
++		return null
++	var space := field.get_world_3d().direct_space_state
++	if space == null:
++		return null
++	var query := PhysicsRayQueryParameters3D.create(from, from + dir.normalized() * RAY_LENGTH,
++			1 << (field.ground_layer - 1))
++	var hit := space.intersect_ray(query)
++	return hit.position if hit else null
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/grass_field.gd scripts/environment/grass_field.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/grass_field.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/environment/grass_field.gd	2026-11-08 11:38:57.220807500 +0800
+@@ -0,0 +1,474 @@
++@tool
++class_name GrassField
++extends Node3D
++## Painted grass over a rectangle centred on this node (unrotated, unscaled).
++##
++## The `mask` image holds R = density (0 = none, 1 = full) and G = height (0 = min_height,
++## 1 = max_height), one texel per `texel_size` metres, texel (0, 0) at the field's -X/-Z corner.
++## Blades are MultiMesh chunks of CHUNK_SIZE metres, chunk (0, 0) also at the -X/-Z corner.
++##
++## Each chunk is reproducible on its own: an RNG seeded from (random_seed, chunk), a fixed
++## number of candidates, and every candidate draws all of its random numbers up front, so a
++## stroke only changes blades where it painted and a rebuild of the same mask gives the same
++## blades. Blades sit on a height cache raycast against `ground_layer` once per texel; points
++## with no ground hit get no blade.
++##
++## Chunk nodes are internal (no owner) and not saved with the scene. Runs in the editor too.
++
++signal rebuilt(blade_count: int)
++
++enum PaintMode { DENSITY, HEIGHT, ERASE }
++
++const CHUNK_SIZE := 16.0
++const SHADER := preload("res://assets/shaders/grass.gdshader")
++const RAY_TOP := 40.0
++const RAY_BOTTOM := -5.0
++const HEIGHT_JITTER := 0.15
++const MAX_LEAN_DEG := 10.0
++
++@export var extent := Vector2(74, 104):
++	set(v):
++		if v != extent:
++			extent = v
++			_invalidate_ground()
++			mark_dirty()
++## Metres per mask texel.
++@export_range(0.1, 4.0, 0.05) var texel_size := 0.5:
++	set(v):
++		if not is_equal_approx(v, texel_size):
++			texel_size = v
++			_invalidate_ground()
++			mark_dirty()
++## R = density, G = height. Created by ensure_mask() when missing.
++@export var mask: Image:
++	set(v):
++		mask = v
++		mark_dirty()
++## Blades per square metre at full density.
++@export_range(0.0, 200.0, 0.5) var blades_per_m2 := 24.0:
++	set(v):
++		if not is_equal_approx(v, blades_per_m2):
++			blades_per_m2 = v
++			mark_dirty()
++@export var min_height := 0.25:
++	set(v):
++		if not is_equal_approx(v, min_height):
++			min_height = v
++			mark_dirty()
++@export var max_height := 0.9:
++	set(v):
++		if not is_equal_approx(v, max_height):
++			max_height = v
++			mark_dirty()
++@export var random_seed := 1:
++	set(v):
++		if v != random_seed:
++			random_seed = v
++			mark_dirty()
++## Physics layer (1-based) the ground ray hits. Walkable ground is on layer 2 ("ground").
++@export_range(1, 32) var ground_layer := 2:
++	set(v):
++		if v != ground_layer:
++			ground_layer = v
++			_invalidate_ground()
++			mark_dirty()
++
++@export_group("Look")
++@export var base_color := Color(0.12, 0.14, 0.10):
++	set(v):
++		base_color = v
++		_update_material()
++@export var tip_color := Color(0.30, 0.31, 0.19):
++	set(v):
++		tip_color = v
++		_update_material()
++## Blades start thinning out at this camera distance...
++@export var fade_start := 25.0:
++	set(v):
++		fade_start = v
++		_update_material()
++## ...and are gone by this one. Chunks are culled a chunk beyond it.
++@export var fade_end := 45.0:
++	set(v):
++		fade_end = v
++		_update_material()
++		for node: MultiMeshInstance3D in _chunks.values():
++			node.visibility_range_end = fade_end + CHUNK_SIZE
++
++static var _mesh: ArrayMesh  # one blade mesh shared by every field
++
++var _dirty := true
++var _chunks := {}  # Vector2i -> MultiMeshInstance3D (only non-empty chunks)
++var _material: ShaderMaterial
++var _ground := PackedFloat32Array()  # one height per texel centre, NAN where the ray missed
++var _ground_valid := false
++var _ground_origin := Vector3.ZERO
++var _ground_size := Vector2i.ZERO
++
++
++func _ready() -> void:
++	mark_dirty()
++
++
++func mark_dirty() -> void:
++	_dirty = true
++
++
++# The first build waits for the physics step: the space state is ready to raycast there.
++func _physics_process(_delta: float) -> void:
++	if _dirty and is_inside_tree():
++		rebuild()
++
++
++# --- mask --------------------------------------------------------------------------------
++
++func mask_size() -> Vector2i:
++	return Vector2i(ceili(extent.x / texel_size), ceili(extent.y / texel_size))
++
++
++## Creates an empty mask (no grass, mid height) if there is none, or resizes a mask of the
++## wrong size (bilinear).
++func ensure_mask() -> void:
++	var size := mask_size()
++	if mask == null:
++		var image := Image.create(size.x, size.y, false, Image.FORMAT_RG8)
++		image.fill(Color(0.0, 0.5, 0.0))
++		mask = image
++		return
++	if mask.get_format() != Image.FORMAT_RG8:
++		mask.convert(Image.FORMAT_RG8)
++	if mask.get_size() != size:
++		mask.resize(size.x, size.y, Image.INTERPOLATE_BILINEAR)
++		mark_dirty()
++
++
++## Bilinear (density, height) at a world position; (0, 0) outside the field.
++func sample(world_xz: Vector2) -> Vector2:
++	if mask == null:
++		return Vector2.ZERO
++	return _sample(mask.get_data(), mask.get_width(), mask.get_height(), world_xz)
++
++
++## Paints a disc. Each texel centre within `radius` moves toward `target` by
++## w = strength * (1 - smoothstep(radius * (1 - falloff), radius, d)). DENSITY paints R,
++## HEIGHT paints G, ERASE moves R to 0 (target is ignored). Returns the rect of texels that
++## changed, clipped to the mask; empty if nothing changed. Call rebuild(rect) afterwards.
++func paint(world_pos: Vector3, radius: float, mode: PaintMode, target: float, strength: float,
++		falloff := 0.5) -> Rect2i:
++	ensure_mask()
++	var size := mask_size()
++	var corner := _corner()
++	var centre := Vector2(world_pos.x, world_pos.z) - corner  # field-local metres
++	var lo := Vector2i(((centre - Vector2.ONE * radius) / texel_size).floor())
++	var hi := Vector2i(((centre + Vector2.ONE * radius) / texel_size).ceil())
++	lo = lo.clamp(Vector2i.ZERO, size)
++	hi = hi.clamp(Vector2i.ZERO, size)
++	if lo.x >= hi.x or lo.y >= hi.y:
++		return Rect2i()
++	var channel := 1 if mode == PaintMode.HEIGHT else 0
++	var goal := 0.0 if mode == PaintMode.ERASE else clampf(target, 0.0, 1.0)
++	var inner := radius * (1.0 - clampf(falloff, 0.0, 1.0))
++	var data := mask.get_data()
++	var changed_lo := size
++	var changed_hi := Vector2i(-1, -1)
++	for y in range(lo.y, hi.y):
++		for x in range(lo.x, hi.x):
++			var d := centre.distance_to((Vector2(x, y) + Vector2(0.5, 0.5)) * texel_size)
++			if d > radius:
++				continue
++			var w := strength * (1.0 - smoothstep(inner, radius, d)) if inner < radius else strength
++			if w <= 0.0:
++				continue
++			var i := (y * size.x + x) * 2 + channel
++			var value := lerpf(data[i] / 255.0, goal, clampf(w, 0.0, 1.0))
++			var byte := clampi(roundi(value * 255.0), 0, 255)
++			if byte == data[i]:
++				continue
++			data[i] = byte
++			changed_lo = changed_lo.min(Vector2i(x, y))
++			changed_hi = changed_hi.max(Vector2i(x, y))
++	if changed_hi.x < 0:
++		return Rect2i()
++	mask.set_data(size.x, size.y, false, Image.FORMAT_RG8, data)
++	return Rect2i(changed_lo, changed_hi - changed_lo + Vector2i.ONE)
++
++
++## Replaces the mask contents (undo) and rebuilds every chunk.
++func set_mask_data(image: Image) -> void:
++	if mask == null:
++		mask = image.duplicate()
++	else:
++		mask.copy_from(image)
++	ensure_mask()
++	rebuild()
++
++
++# --- blades ------------------------------------------------------------------------------
++
++## Rebuilds the blades. An empty rect rebuilds every chunk; otherwise only the chunks touching
++## the texel rect grown by one texel (bilinear sampling reaches one texel out).
++func rebuild(texel_rect := Rect2i()) -> void:
++	if not is_inside_tree():
++		mark_dirty()
++		return
++	if mask != null:
++		ensure_mask()
++	if not _ground_is_valid():
++		_cache_ground()
++	var counts := _chunk_count()
++	var targets: Array[Vector2i] = []
++	if texel_rect.has_area():
++		var grown := texel_rect.grow(1)
++		var c0 := _texel_to_chunk(grown.position)
++		var c1 := _texel_to_chunk(grown.end - Vector2i.ONE)
++		for cy in range(maxi(c0.y, 0), mini(c1.y, counts.y - 1) + 1):
++			for cx in range(maxi(c0.x, 0), mini(c1.x, counts.x - 1) + 1):
++				targets.append(Vector2i(cx, cy))
++	else:
++		_dirty = false
++		for node: Node in _chunks.values():
++			remove_child(node)
++			node.free()
++		_chunks.clear()
++		for cy in counts.y:
++			for cx in counts.x:
++				targets.append(Vector2i(cx, cy))
++	var data := mask.get_data() if mask != null else PackedByteArray()
++	for chunk in targets:
++		_build_chunk(chunk, data)
++	rebuilt.emit(blade_count())
++
++
++## Re-raycasts the ground height cache (after the ground moved), then rebuilds.
++func refresh_ground() -> void:
++	_invalidate_ground()
++	rebuild()
++
++
++## Ground height at a world position, bilinear between texel centres; NAN outside the field or
++## if any of the surrounding samples found no ground.
++func ground_height_at(world_xz: Vector2) -> float:
++	if not _ground_is_valid():
++		if not is_inside_tree():
++			return NAN
++		_cache_ground()
++	var local := world_xz - _corner()
++	if local.x < 0.0 or local.y < 0.0 or local.x > extent.x or local.y > extent.y:
++		return NAN
++	var size := _ground_size
++	var u := local / texel_size - Vector2(0.5, 0.5)
++	var x0 := clampi(floori(u.x), 0, size.x - 1)
++	var y0 := clampi(floori(u.y), 0, size.y - 1)
++	var x1 := mini(x0 + 1, size.x - 1)
++	var y1 := mini(y0 + 1, size.y - 1)
++	var fx := clampf(u.x - x0, 0.0, 1.0)
++	var fy := clampf(u.y - y0, 0.0, 1.0)
++	var a := _ground[y0 * size.x + x0]
++	var b := _ground[y0 * size.x + x1]
++	var c := _ground[y1 * size.x + x0]
++	var d := _ground[y1 * size.x + x1]
++	if is_nan(a) or is_nan(b) or is_nan(c) or is_nan(d):
++		return NAN
++	return lerpf(lerpf(a, b, fx), lerpf(c, d, fx), fy)
++
++
++func blade_count() -> int:
++	var n := 0
++	for node: MultiMeshInstance3D in _chunks.values():
++		n += node.multimesh.instance_count
++	return n
++
++
++## The node drawing a chunk, or null if the chunk has no blades.
++func chunk_instance(chunk: Vector2i) -> MultiMeshInstance3D:
++	return _chunks.get(chunk)
++
++
++## A tapered blade: 3 segments (7 vertices), 1 unit tall, facing +Z. UV.y = 0 at the base,
++## 1 at the tip.
++static func blade_mesh() -> ArrayMesh:
++	const HALF_WIDTH := [0.04, 0.032, 0.02]
++	var verts := PackedVector3Array()
++	var uvs := PackedVector2Array()
++	var normals := PackedVector3Array()
++	for s in 3:
++		var y := s / 3.0
++		for side: float in [-1.0, 1.0]:
++			verts.append(Vector3(side * HALF_WIDTH[s], y, 0.0))
++			uvs.append(Vector2(0.5 + side * 0.5, y))
++			normals.append(Vector3.BACK)
++	verts.append(Vector3(0.0, 1.0, 0.0))
++	uvs.append(Vector2(0.5, 1.0))
++	normals.append(Vector3.BACK)
++	var indices := PackedInt32Array([0, 1, 2, 1, 3, 2, 2, 3, 4, 3, 5, 4, 4, 5, 6])
++	var arrays := []
++	arrays.resize(Mesh.ARRAY_MAX)
++	arrays[Mesh.ARRAY_VERTEX] = verts
++	arrays[Mesh.ARRAY_NORMAL] = normals
++	arrays[Mesh.ARRAY_TEX_UV] = uvs
++	arrays[Mesh.ARRAY_INDEX] = indices
++	var mesh := ArrayMesh.new()
++	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
++	return mesh
++
++
++# --- internals ---------------------------------------------------------------------------
++
++func _corner() -> Vector2:
++	return Vector2(global_position.x, global_position.z) - extent * 0.5
++
++
++func _chunk_count() -> Vector2i:
++	return Vector2i(ceili(extent.x / CHUNK_SIZE), ceili(extent.y / CHUNK_SIZE))
++
++
++func _texel_to_chunk(texel: Vector2i) -> Vector2i:
++	return Vector2i(floori((texel.x + 0.5) * texel_size / CHUNK_SIZE),
++			floori((texel.y + 0.5) * texel_size / CHUNK_SIZE))
++
++
++func _sample(data: PackedByteArray, w: int, h: int, world_xz: Vector2) -> Vector2:
++	var local := world_xz - _corner()
++	if w == 0 or h == 0 or local.x < 0.0 or local.y < 0.0 or local.x > extent.x or local.y > extent.y:
++		return Vector2.ZERO
++	var u := local / texel_size - Vector2(0.5, 0.5)
++	var x0 := clampi(floori(u.x), 0, w - 1)
++	var y0 := clampi(floori(u.y), 0, h - 1)
++	var x1 := mini(x0 + 1, w - 1)
++	var y1 := mini(y0 + 1, h - 1)
++	var fx := clampf(u.x - x0, 0.0, 1.0)
++	var fy := clampf(u.y - y0, 0.0, 1.0)
++	var i00 := (y0 * w + x0) * 2
++	var i10 := (y0 * w + x1) * 2
++	var i01 := (y1 * w + x0) * 2
++	var i11 := (y1 * w + x1) * 2
++	var r := lerpf(lerpf(data[i00], data[i10], fx), lerpf(data[i01], data[i11], fx), fy)
++	var g := lerpf(lerpf(data[i00 + 1], data[i10 + 1], fx), lerpf(data[i01 + 1], data[i11 + 1], fx), fy)
++	return Vector2(r, g) / 255.0
++
++
++## True if no texel a bilinear sample inside the chunk can reach has any density.
++func _chunk_is_empty(chunk: Vector2i, data: PackedByteArray) -> bool:
++	if data.is_empty():
++		return true
++	var size := mask_size()
++	var per := CHUNK_SIZE / texel_size
++	var lo := Vector2i(floori(chunk.x * per) - 1, floori(chunk.y * per) - 1).clamp(Vector2i.ZERO, size)
++	var hi := Vector2i(ceili((chunk.x + 1) * per) + 1, ceili((chunk.y + 1) * per) + 1).clamp(Vector2i.ZERO, size)
++	for y in range(lo.y, hi.y):
++		for x in range(lo.x, hi.x):
++			if data[(y * size.x + x) * 2] > 0:
++				return false
++	return true
++
++
++func _build_chunk(chunk: Vector2i, data: PackedByteArray) -> void:
++	if _chunks.has(chunk):
++		var old: Node = _chunks[chunk]
++		_chunks.erase(chunk)
++		remove_child(old)
++		old.free()
++	if _chunk_is_empty(chunk, data):
++		return
++	var size := mask_size()
++	var corner := _corner() + Vector2(chunk) * CHUNK_SIZE
++	var rng := RandomNumberGenerator.new()
++	rng.seed = hash([random_seed, chunk.x, chunk.y])
++	var transforms: Array[Transform3D] = []
++	var customs: Array[Color] = []
++	var origin := global_position
++	for i in int(blades_per_m2 * CHUNK_SIZE * CHUNK_SIZE):
++		var p := corner + Vector2(rng.randf(), rng.randf()) * CHUNK_SIZE
++		var keep := rng.randf()
++		var jitter := 1.0 + rng.randf_range(-HEIGHT_JITTER, HEIGHT_JITTER)
++		var yaw := rng.randf() * TAU
++		var lean := deg_to_rad(rng.randf_range(-MAX_LEAN_DEG, MAX_LEAN_DEG))
++		var custom := Color(rng.randf(), rng.randf(), rng.randf(), 0.0)  # tint, phase, fade
++
++		var s := _sample(data, size.x, size.y, p)
++		if keep >= s.x:
++			continue
++		var y := ground_height_at(p)
++		if is_nan(y):
++			continue
++		var height := lerpf(min_height, max_height, s.y) * jitter
++		var basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, lean) * Basis.from_scale(Vector3(1.0, height, 1.0))
++		transforms.append(Transform3D(basis, Vector3(p.x, y, p.y) - origin))
++		customs.append(custom)
++	if transforms.is_empty():
++		return
++
++	var mm := MultiMesh.new()
++	mm.transform_format = MultiMesh.TRANSFORM_3D
++	mm.use_custom_data = true
++	mm.mesh = _shared_mesh()
++	mm.instance_count = transforms.size()
++	for i in transforms.size():
++		mm.set_instance_transform(i, transforms[i])
++		mm.set_instance_custom_data(i, customs[i])
++	var node := MultiMeshInstance3D.new()
++	node.name = "Chunk_%d_%d" % [chunk.x, chunk.y]
++	node.multimesh = mm
++	node.material_override = _get_material()
++	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
++	node.visibility_range_end = fade_end + CHUNK_SIZE
++	add_child(node)  # internal: no owner, never saved
++	_chunks[chunk] = node
++
++
++static func _shared_mesh() -> ArrayMesh:
++	if _mesh == null:
++		_mesh = blade_mesh()
++	return _mesh
++
++
++func _get_material() -> ShaderMaterial:
++	if _material == null:
++		_material = ShaderMaterial.new()
++		_material.shader = SHADER
++		_update_material()
++	return _material
++
++
++func _update_material() -> void:
++	if _material == null:
++		return
++	_material.set_shader_parameter("base_color", base_color)
++	_material.set_shader_parameter("tip_color", tip_color)
++	_material.set_shader_parameter("fade_start", fade_start)
++	_material.set_shader_parameter("fade_end", fade_end)
++
++
++# --- ground cache ------------------------------------------------------------------------
++
++func _invalidate_ground() -> void:
++	_ground_valid = false
++
++
++func _ground_is_valid() -> bool:
++	return _ground_valid and _ground_size == mask_size() and _ground_origin.is_equal_approx(global_position)
++
++
++## One downward ray per texel centre against `ground_layer`.
++func _cache_ground() -> void:
++	var size := mask_size()
++	_ground.resize(size.x * size.y)
++	_ground.fill(NAN)
++	_ground_size = size
++	_ground_origin = global_position
++	_ground_valid = true
++	var space := get_world_3d().direct_space_state if is_inside_tree() else null
++	if space == null:
++		_ground_valid = false
++		return
++	var corner := _corner()
++	var query := PhysicsRayQueryParameters3D.new()
++	query.collision_mask = 1 << (ground_layer - 1)
++	for y in size.y:
++		for x in size.x:
++			var p := corner + (Vector2(x, y) + Vector2(0.5, 0.5)) * texel_size
++			query.from = Vector3(p.x, RAY_TOP, p.y)
++			query.to = Vector3(p.x, RAY_BOTTOM, p.y)
++			var hit := space.intersect_ray(query)
++			if hit:
++				_ground[y * size.x + x] = hit.position.y
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/kit_asset.gd scripts/environment/kit_asset.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/kit_asset.gd	2026-11-08 11:21:39.239807100 +0800
++++ scripts/environment/kit_asset.gd	2026-11-08 12:03:19.126599700 +0800
+@@ -1,19 +1,26 @@
+ @tool
+ extends Node3D
+ ## Root of a kit asset scene (scenes/environment/kit/). Replaces every imported material
+ ## with the palette material of the same name (res://assets/materials/<name>.tres), so
+ ## Blender only has to name materials correctly; colour and shading live in Godot.
+ 
+ const PALETTE_DIR := "res://assets/materials/"
++## Walkable ground is on layer 1 (world) + layer 2 (ground); grass rays against layer 2 only.
++const GROUND_LAYERS := 3
++
++## Adds trimesh collision on the ground layers (for terrain pieces such as mounds).
++@export var collision := false
+ 
+ 
+ func _ready() -> void:
+ 	_apply_palette(self)
++	if collision:
++		_build_collision()
+ 
+ 
+ func _apply_palette(node: Node) -> void:
+ 	var instance := node as MeshInstance3D
+ 	if instance and instance.mesh:
+ 		for i in instance.mesh.get_surface_count():
+ 			var source: Material = instance.mesh.surface_get_material(i)
+ 			if source == null:
+@@ -22,10 +29,29 @@
+ 			if ResourceLoader.exists(path):
+ 				instance.set_surface_override_material(i, load(path))
+ 			else:
+ 				push_warning("%s: no palette material '%s'" % [owner_name(), source.resource_name])
+ 	for child in node.get_children():
+ 		_apply_palette(child)
+ 
+ 
++## One static body ("Collision", no owner so it is never saved) with a trimesh per mesh.
++func _build_collision() -> void:
++	if has_node("Collision"):
++		return
++	var body := StaticBody3D.new()
++	body.name = "Collision"
++	body.collision_layer = GROUND_LAYERS
++	add_child(body)
++	var to_local := global_transform.affine_inverse()
++	for instance in find_children("*", "MeshInstance3D", true, false):
++		var mesh_instance := instance as MeshInstance3D
++		if mesh_instance.mesh == null:
++			continue
++		var shape := CollisionShape3D.new()
++		shape.shape = mesh_instance.mesh.create_trimesh_shape()
++		body.add_child(shape)
++		shape.transform = to_local * mesh_instance.global_transform
++
++
+ func owner_name() -> String:
+ 	return scene_file_path.get_file() if scene_file_path else String(name)
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/wind.gd scripts/environment/wind.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/wind.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/environment/wind.gd	2026-11-08 11:24:06.870500800 +0800
+@@ -0,0 +1,50 @@
++@tool
++class_name Wind
++extends Node
++## The scene's wind: a strength, a compass direction and a gust field that travels with it.
++## Publishes three global shader uniforms (wind_strength, wind_direction, wind_offset) that
++## wind.gdshaderinc reads. The offset is integrated here, never derived from TIME * speed, so
++## changing strength or direction can't make the gust pattern jump.
++
++## Metres per second the gust pattern travels at strength 1.0.
++const GUST_SPEED := 4.0
++
++## 0 = calm, 1 = the Stage 8 look, 2 = storm.
++@export_range(0, 2) var strength := 0.6:
++	set(value):
++		strength = value
++		_publish("wind_strength", value)
++## Compass angle the wind blows toward: 0 = toward -Z, 90 = toward +X, clockwise from above.
++@export_range(0, 360) var direction_degrees := 53.13:
++	set(value):
++		direction_degrees = value
++		_publish("wind_direction", vector())
++## How far the gust pattern has travelled, in metres.
++var offset := Vector2.ZERO
++
++
++func _ready() -> void:
++	_publish("wind_strength", strength)
++	_publish("wind_direction", vector())
++	_publish("wind_offset", offset)
++
++
++func _process(delta: float) -> void:
++	offset += vector() * strength * GUST_SPEED * delta
++	_publish("wind_offset", offset)
++
++
++## Unit vector on the ground plane (x, z) the wind blows toward.
++static func vector_for(degrees: float) -> Vector2:
++	var rad := deg_to_rad(degrees)
++	return Vector2(sin(rad), -cos(rad))
++
++
++func vector() -> Vector2:
++	return vector_for(direction_degrees)
++
++
++## A no-op when the global doesn't exist (a project without the shader_globals entries).
++func _publish(global_name: String, value: Variant) -> void:
++	if ProjectSettings.has_setting("shader_globals/" + global_name):
++		RenderingServer.global_shader_parameter_set(global_name, value)
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/playground.gd scripts/playground.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/playground.gd	2026-11-08 11:21:39.282057900 +0800
++++ scripts/playground.gd	2026-11-08 12:00:45.827474300 +0800
+@@ -17,48 +17,45 @@
+ 	"Lighting": Viewport.DEBUG_DRAW_LIGHTING,
+ 	"Overdraw": Viewport.DEBUG_DRAW_OVERDRAW,
+ 	"Wireframe": Viewport.DEBUG_DRAW_WIREFRAME,
+ }
+ const GAMEPLAY := 0
+ const SCOUT := 1
+ const GAMEPLAY_INTENT := "Follow camera. Use Shift X/Y to put the player on a third instead of dead centre."
+ const SCOUT_INTENT := "Scout: fly around (WASD, RMB look, Q/E down/up). Press B to bookmark the shot."
+-## Keep in sync with WIND_DIR in flat_color.gdshader.
+-const WIND_DIR := Vector2(0.8, -0.6)
+ const MIST_DRIFT := 0.05  # noise-space units per second at wind 1.0
+ const MOTE_DRIFT := 0.3  # m/s² of sideways push on motes at wind 1.0
+ ## Sky halo brightness relative to the in-fog sun scatter, so one slider drives both.
+ const SKY_GLOW_PER_SCATTER := 3.2
+ 
+ ## Applied in this order: the view must switch before FOV is set on it.
+ const PARAM_ORDER := [
+ 	"view", "cam_fov", "cam_height", "cam_distance", "cam_pitch", "cam_shift_x", "cam_shift_y",
+ 	"guides_grid", "guides_center", "guides_aspect",
+ 	"value_mode", "value_squint", "value_split",
+ 	"light_energy", "light_elevation", "light_azimuth", "sun_color", "ambient_energy", "shadows",
+ 	"sky_color", "zenith_color", "sun_glow", "fog_enabled", "fog_density", "fog_height_density",
+ 	"light_shafts", "shaft_density", "mist",
+-	"wind", "motes",
++	"wind", "wind_direction", "motes",
+ 	"supernatural", "spirit_amount", "hole_glow",
+-	"landmark_visible", "props_visible",
++	"landmark_visible", "props_visible", "grass_visible",
+ 	"forest_mode", "scatter_seed", "tree_density", "tree_spacing", "tree_clumping", "rock_density", "show_zones",
+ ]
+ 
+ ## [0] gameplay, [1] scout, then authored viewpoints, then runtime bookmarks.
+ var _cameras: Array[Camera3D] = []
+ var _default_fovs: Array[float] = []
+ var _view := GAMEPLAY
+ var _last_fixed_view := GAMEPLAY  # where F returns to after scouting
+ var _bookmark_count := 0
+ var _default_state: Dictionary
+ var _player_start: Transform3D
+ var _layout_env: Environment  # fog-free copy for viewpoints with ignore_fog
+ var _hud: Label
+-var _wind := 0.0
+ var _mist_offset := Vector3.ZERO
+ var _forest_mode := "Manual"
+ var _show_zones := false
+ ## Where user presets are saved; tests point this at user://.
+ var preset_path := Presets.USER_PATH
+ var _typing := false  # a panel text field has focus: no hotkeys, no walking
+ var compare: Compare
+ var probe: ValueProbe
+@@ -69,17 +66,19 @@
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var scout_cam: ScoutCamera = $ScoutCamera
+ @onready var sun: DirectionalLight3D = $Sun
+ @onready var env: Environment = $WorldEnvironment.environment
+ @onready var landmark: Node3D = $Landmark
+ @onready var props: Node3D = $Props
++@onready var grass: GrassField = $Grass
+ @onready var mist: FogVolume = $Mist
++@onready var wind: Wind = $Wind
+ @onready var motes: GPUParticles3D = $Player/Motes
+ @onready var spirit_stream: SpiritStream = $SpiritStream
+ @onready var hole_glow: Breathe = $Landmark/HoleGlow
+ @onready var hole_light: SpotLight3D = $Landmark/HoleLight
+ @onready var sky_material: ShaderMaterial = env.sky.sky_material
+ ## The hand-placed forest. Detached from the tree (not just hidden) in procedural mode, so its
+ ## colliders go away too.
+ @onready var manual_forest: Node3D = $Forest
+@@ -99,18 +98,17 @@
+ 			_register_viewpoint(c)
+ 	for c in _cameras:
+ 		_default_fovs.append(c.fov)
+ 	_player_start = player.global_transform
+ 	# Unset shader uniforms read back as null, so give the value view explicit defaults.
+ 	_value_material().set_shader_parameter("mode", 0)
+ 	_value_material().set_shader_parameter("squint", 0.0)
+ 	_value_material().set_shader_parameter("split", 0.62)
+-	_wind = ProjectSettings.get_setting("shader_globals/wind_strength", {"value": 0.6})["value"]
+-	set_param("wind", _wind)
++	_update_mote_gravity()
+ 	_build_hud()
+ 	panel.add_to_group("overlay")
+ 	_hud.add_to_group("overlay")
+ 	compare = Compare.new()
+ 	compare.name = "Compare"
+ 	compare.pg = self
+ 	add_child(compare)
+ 	compare.changed.connect(_on_compare_changed)
+@@ -131,17 +129,18 @@
+ 	tree_scatter.generated.connect(_on_scatter_generated)
+ 	rock_scatter.generated.connect(_on_scatter_generated)
+ 	_run_command_line.call_deferred()
+ 
+ 
+ func _process(delta: float) -> void:
+ 	# Advance the mist with the wind; integrating (instead of TIME * speed in the shader)
+ 	# keeps it from jumping when the wind slider moves.
+-	_mist_offset -= Vector3(WIND_DIR.x, 0.0, WIND_DIR.y) * _wind * MIST_DRIFT * delta
++	var drift := wind.vector() * wind.strength * MIST_DRIFT * delta
++	_mist_offset -= Vector3(drift.x, 0.0, drift.y)
+ 	mist.material.set_shader_parameter("offset", _mist_offset)
+ 
+ 
+ func _exit_tree() -> void:
+ 	if manual_forest and not manual_forest.is_inside_tree():
+ 		manual_forest.free()  # detached in procedural mode; free it ourselves
+ 
+ 
+@@ -212,26 +211,28 @@
+ 		"ambient_energy": return env.ambient_light_energy
+ 		"shadows": return sun.shadow_enabled
+ 		"sky_color": return env.fog_light_color
+ 		"zenith_color": return env.ambient_light_color
+ 		"sun_glow": return env.fog_sun_scatter
+ 		"light_shafts": return env.volumetric_fog_enabled
+ 		"shaft_density": return env.volumetric_fog_density
+ 		"mist": return mist.material.get_shader_parameter("density")
+-		"wind": return _wind
++		"wind": return wind.strength
++		"wind_direction": return wind.direction_degrees
+ 		"motes": return motes.emitting
+ 		"supernatural": return spirit_stream.visible
+ 		"spirit_amount": return spirit_stream.amount_ratio
+ 		"hole_glow": return hole_glow.intensity
+ 		"fog_enabled": return env.fog_enabled
+ 		"fog_density": return env.fog_density
+ 		"fog_height_density": return env.fog_height_density
+ 		"landmark_visible": return landmark.visible
+ 		"props_visible": return props.visible
++		"grass_visible": return grass.visible
+ 		"forest_mode": return _forest_mode
+ 		"scatter_seed": return float(tree_scatter.random_seed)
+ 		"tree_density": return tree_scatter.density
+ 		"tree_spacing": return tree_scatter.min_spacing
+ 		"tree_clumping": return tree_scatter.clumping
+ 		"rock_density": return rock_scatter.density
+ 		"show_zones": return _show_zones
+ 		"probe": return probe.visible
+@@ -286,36 +287,38 @@
+ 			_sync_layout_env()
+ 		"sun_glow":
+ 			env.fog_sun_scatter = value
+ 			sky_material.set_shader_parameter("glow_energy", value * SKY_GLOW_PER_SCATTER)
+ 		"light_shafts": env.volumetric_fog_enabled = value
+ 		"shaft_density": env.volumetric_fog_density = value
+ 		"mist": mist.material.set_shader_parameter("density", value)
+ 		"wind":
+-			_wind = value
+-			RenderingServer.global_shader_parameter_set("wind_strength", value)
+-			var process: ParticleProcessMaterial = motes.process_material
+-			process.gravity = Vector3(WIND_DIR.x * value * MOTE_DRIFT, -0.03, WIND_DIR.y * value * MOTE_DRIFT)
++			wind.strength = value
++			_update_mote_gravity()
++		"wind_direction":
++			wind.direction_degrees = value
++			_update_mote_gravity()
+ 		"motes":
+ 			motes.emitting = value
+ 			motes.visible = value
+ 		"supernatural":
+ 			# Off means the plain Stage 6 world: the hole shows sky again.
+ 			spirit_stream.emitting = value
+ 			spirit_stream.visible = value
+ 			hole_glow.visible = value
+ 			hole_light.visible = value
+ 		"spirit_amount": spirit_stream.amount_ratio = value
+ 		"hole_glow": hole_glow.intensity = value
+ 		"fog_enabled": env.fog_enabled = value
+ 		"fog_density": env.fog_density = value
+ 		"fog_height_density": env.fog_height_density = value
+ 		"landmark_visible": landmark.visible = value
+ 		"props_visible": props.visible = value
++		"grass_visible": grass.visible = value
+ 		"forest_mode": _set_forest_mode(value)
+ 		"scatter_seed":
+ 			tree_scatter.random_seed = int(value)
+ 			rock_scatter.random_seed = int(value)
+ 		"tree_density": tree_scatter.density = value
+ 		"tree_spacing": tree_scatter.min_spacing = value
+ 		"tree_clumping": tree_scatter.clumping = value
+ 		"rock_density": rock_scatter.density = value
+@@ -334,37 +337,55 @@
+ 
+ func get_state() -> Dictionary:
+ 	var state := {}
+ 	for key in PARAM_ORDER:
+ 		state[key] = get_param(key)
+ 	return state
+ 
+ 
+-func apply_state(state: Dictionary) -> void:
++## Applies the keys of `state`, skipping a value whose type differs from the default's (int and
++## float count as one). Returns the skip notes, which are also shown in the panel's status line.
++func apply_state(state: Dictionary) -> Array[String]:
++	var skipped: Array[String] = []
+ 	for key in PARAM_ORDER:
+-		if state.has(key):
+-			set_param(key, state[key])
++		if not state.has(key):
++			continue
++		if _default_state.has(key) and not _same_type(state[key], _default_state[key]):
++			skipped.append("Skipped %s: expected %s" % [key, type_string(typeof(_default_state[key]))])
++			continue
++		set_param(key, state[key])
+ 	panel.sync()
++	if not skipped.is_empty():
++		panel.notify("; ".join(PackedStringArray(skipped)))
++	return skipped
++
++
++static func _same_type(a: Variant, b: Variant) -> bool:
++	var numeric := [TYPE_INT, TYPE_FLOAT]
++	return typeof(a) == typeof(b) or (typeof(a) in numeric and typeof(b) in numeric)
+ 
+ 
+ ## Presets are layered on top of the default state, so they are always reproducible.
+ func apply_preset(preset_name: String) -> void:
+ 	var presets := Presets.all(preset_path)
+ 	if not presets.has(preset_name):
+ 		panel.notify("No preset named %s" % preset_name)
+ 		return
+ 	_restore_fovs()
+ 	var preset: Dictionary = presets[preset_name]
+ 	var state := _default_state.duplicate()
+ 	if preset.has("view") and not preset.has("cam_fov"):
+ 		state.erase("cam_fov")  # keep the viewpoint's authored lens, not the gameplay FOV
+ 	state.merge(preset, true)
+-	apply_state(state)
+-	panel.notify("Preset: %s" % preset_name)
++	var skipped := apply_state(state)
++	var note := "Preset: %s" % preset_name
++	if not skipped.is_empty():
++		note += " (%s)" % "; ".join(PackedStringArray(skipped))
++	panel.notify(note)
+ 
+ 
+ ## Saves the current state as a user preset (overrides on top of the default). True on success.
+ func save_preset(preset_name: String) -> bool:
+ 	var error := Presets.save_user(preset_name, get_state(), _default_state, preset_path)
+ 	if error != "":
+ 		panel.notify(error)
+ 		return false
+@@ -494,16 +515,22 @@
+ 	_view = index
+ 	_cameras[index].make_current()
+ 	player.input_enabled = index != SCOUT and not _typing
+ 	if index == GAMEPLAY:
+ 		follow_cam.snap()
+ 	_update_hud()
+ 
+ 
++func _update_mote_gravity() -> void:
++	var push := wind.vector() * wind.strength * MOTE_DRIFT
++	var process: ParticleProcessMaterial = motes.process_material
++	process.gravity = Vector3(push.x, -0.03, push.y)
++
++
+ func _sync_layout_env() -> void:
+ 	if _layout_env == null:
+ 		_layout_env = env.duplicate()  # shares the sky resource, so sky colours follow
+ 		_layout_env.fog_enabled = false
+ 		_layout_env.volumetric_fog_enabled = false
+ 	# Plan view: readability over mood, so fill the shadows with the (lighter) horizon colour.
+ 	_layout_env.ambient_light_color = env.fog_light_color
+ 	_layout_env.ambient_light_energy = maxf(env.ambient_light_energy, 1.0)
+@@ -627,10 +654,47 @@
+ 	var args := OS.get_cmdline_user_args()
+ 	for arg in args:
+ 		if arg.begins_with("--preset="):
+ 			apply_preset(arg.trim_prefix("--preset=").trim_prefix("\"").trim_suffix("\""))
+ 	if "--capture-views" in args:
+ 		for _f in 30:  # let shadows/SSAO settle
+ 			await get_tree().process_frame
+ 		await capture_all_views()
++	if "--profile-views" in args:
++		for _f in 30:
++			await get_tree().process_frame
++		await profile_views()
+ 	if "--quit" in args:
+ 		get_tree().quit()
++
++
++## Measures every fixed view with grass on then off (settle 30 frames, measure 120), prints the
++## table and writes it to screenshots/profile_<datetime>.md. Run with --disable-vsync.
++func profile_views() -> String:
++	var previous := _view
++	var grass_was := grass.visible
++	hide_overlays()
++	var rows: Array[Dictionary] = []
++	for i in _cameras.size():
++		if i == SCOUT:
++			continue
++		_set_view(i)
++		for on in [true, false]:
++			grass.visible = on
++			for _f in 30:
++				await get_tree().process_frame
++			var m: Dictionary = await perf_hud.measure(120)
++			m["view"] = view_names()[i]
++			m["grass"] = on
++			rows.append(m)
++	grass.visible = grass_was
++	restore_overlays()
++	_set_view(previous)
++	panel.sync()
++	var text := PerfHud.table(rows)
++	print(text)
++	var dir := screenshot_path("profile").get_base_dir()
++	var stamp := Time.get_datetime_string_from_system().replace(":", "-")
++	var file := FileAccess.open(dir.path_join("profile_%s.md" % stamp), FileAccess.WRITE)
++	if file:
++		file.store_string(text)
++	return text
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/presets.gd scripts/presets.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/presets.gd	2026-11-08 11:21:39.272678800 +0800
++++ scripts/presets.gd	2026-11-08 12:00:45.553577600 +0800
+@@ -140,16 +140,25 @@
+ 			continue
+ 		var preset := {}
+ 		for key in cfg.get_section_keys(section):
+ 			preset[key] = cfg.get_value(section, key)
+ 		result[section] = preset
+ 	return result
+ 
+ 
++## "" when the saved presets file reads fine or doesn't exist yet, otherwise a message for the
++## panel's status line (all() silently shows only the built-ins in that case).
++static func load_error(path := USER_PATH) -> String:
++	var err := ConfigFile.new().load(path)
++	if err == OK or err == ERR_FILE_NOT_FOUND:
++		return ""
++	return "Can't read %s (error %d): fix or delete it" % [path, err]
++
++
+ ## The keys of `state` whose values differ from `base`, with the values from `state`.
+ static func overrides(state: Dictionary, base: Dictionary) -> Dictionary:
+ 	var result := {}
+ 	for key in state:
+ 		if not base.has(key) or not same_value(state[key], base[key]):
+ 			result[key] = state[key]
+ 	return result
+ 
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/ui/dev_panel.gd scripts/ui/dev_panel.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/ui/dev_panel.gd	2026-11-08 11:21:39.260546900 +0800
++++ scripts/ui/dev_panel.gd	2026-11-08 12:00:45.691315500 +0800
+@@ -66,28 +66,30 @@
+ 	_slider("fog_height_density", "Ground fog", 0, 1, 0.01)
+ 	_check("light_shafts", "Light shafts (volumetric fog)")
+ 	_slider("shaft_density", "Shaft density", 0, 0.08, 0.001)
+ 	_slider("mist", "Drifting mist", 0, 2, 0.01)
+ 	_note("Light shafts and mist are volumetric: mist only shows while Light shafts is on.")
+ 
+ 	_section("Motion")
+ 	_slider("wind", "Wind", 0, 2, 0.01)
++	_slider("wind_direction", "Wind direction", 0, 360, 1)
+ 	_check("motes", "Floating motes")
+-	_note("Wind drives tree sway, cloth flutter, mist drift and motes. Fire and lantern always flicker.")
++	_note("Wind drives grass, tree sway, cloth flutter, mist drift and motes. Direction is where it blows toward: 0 = into the screen from Gameplay's start, 90 = right. Fire and lantern always flicker.")
+ 
+ 	_section("Supernatural")
+ 	_check("supernatural", "Monolith awake (glow, shaft, spirits)")
+ 	_slider("spirit_amount", "Spirits", 0, 1, 0.01)
+ 	_slider("hole_glow", "Hole glow", 0, 2, 0.01)
+ 	_note("Spirits flow from the hole to the ember. The cold shaft from the hole only shows while Light shafts is on.")
+ 
+ 	_section("Environment")
+ 	_check("landmark_visible", "Landmark")
+ 	_check("props_visible", "Story props (camp, posts, cairns, stumps, log)")
++	_check("grass_visible", "Grass")
+ 	_option("forest_mode", "Forest", PackedStringArray(_pg.FOREST_MODES))
+ 	_slider("scatter_seed", "Seed", 1, 999, 1)
+ 	_slider("tree_density", "Tree density", 0, 10, 0.1)
+ 	_slider("tree_spacing", "Tree spacing", 1.5, 8, 0.1)
+ 	_slider("tree_clumping", "Clumping", 0, 1, 0.01)
+ 	_slider("rock_density", "Rock density", 0, 4, 0.05)
+ 	var scatter_row := HBoxContainer.new()
+ 	_box.add_child(scatter_row)
+@@ -168,16 +170,20 @@
+ 			_value_labels[key].text = _label_for(key, value, c.step)
+ 
+ 
+ func notify(text: String) -> void:
+ 	if _status:
+ 		_status.text = text
+ 
+ 
++func status_text() -> String:
++	return _status.text if _status else ""
++
++
+ ## Lists what differs between A and B (the experiment log's "Changed" column).
+ func update_compare() -> void:
+ 	if _diff_label == null:
+ 		return
+ 	var c: Compare = _pg.compare
+ 	if not c.has_a():
+ 		_diff_label.text = "Nothing pinned."
+ 		return
+@@ -332,16 +338,19 @@
+ ## Rebuilds the preset buttons, e.g. after a save adds one.
+ func refresh_presets() -> void:
+ 	for child in _preset_grid.get_children():
+ 		_preset_grid.remove_child(child)
+ 		child.queue_free()
+ 	for preset_name in Presets.all(_pg.preset_path):
+ 		_preset_grid.add_child(_button(preset_name, _pg.apply_preset.bind(preset_name)))
+ 	_preset_grid.add_child(_button("Reset", _pg.reset_scene))
++	var problem := Presets.load_error(_pg.preset_path)
++	if problem != "":
++		notify(problem)
+ 
+ 
+ func preset_buttons() -> PackedStringArray:
+ 	var names := PackedStringArray()
+ 	for child in _preset_grid.get_children():
+ 		names.append(child.text)
+ 	return names
+ 
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scenes/environment/kit/ground_mound_a.tscn scenes/environment/kit/ground_mound_a.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scenes/environment/kit/ground_mound_a.tscn	2026-11-08 11:21:39.285574700 +0800
++++ scenes/environment/kit/ground_mound_a.tscn	2026-11-08 12:03:19.397252000 +0800
+@@ -1,9 +1,10 @@
+ [gd_scene format=3]
+ 
+ [ext_resource type="Script" path="res://scripts/environment/kit_asset.gd" id="1"]
+ [ext_resource type="PackedScene" path="res://assets/meshes/ground_mound_a.glb" id="2"]
+ 
+ [node name="ground_mound_a" type="Node3D"]
+ script = ExtResource("1")
++collision = true
+ 
+ [node name="Model" parent="." instance=ExtResource("2")]
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scenes/environment/kit/ground_mound_b.tscn scenes/environment/kit/ground_mound_b.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scenes/environment/kit/ground_mound_b.tscn	2026-11-08 11:21:39.286578500 +0800
++++ scenes/environment/kit/ground_mound_b.tscn	2026-11-08 12:03:19.652223100 +0800
+@@ -1,9 +1,10 @@
+ [gd_scene format=3]
+ 
+ [ext_resource type="Script" path="res://scripts/environment/kit_asset.gd" id="1"]
+ [ext_resource type="PackedScene" path="res://assets/meshes/ground_mound_b.glb" id="2"]
+ 
+ [node name="ground_mound_b" type="Node3D"]
+ script = ExtResource("1")
++collision = true
+ 
+ [node name="Model" parent="." instance=ExtResource("2")]
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scenes/playground.tscn scenes/playground.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scenes/playground.tscn	2026-11-08 11:21:39.294263500 +0800
++++ scenes/playground.tscn	2026-11-08 12:03:19.925383400 +0800
+@@ -1,11 +1,12 @@
+ [gd_scene format=3]
+ 
+ [ext_resource type="Script" path="res://scripts/playground.gd" id="1"]
++[ext_resource type="Script" path="res://scripts/environment/wind.gd" id="wind_script"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/tree_dead.tscn" id="3"]
+ [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="6"]
+ [ext_resource type="Material" path="res://assets/materials/ground.tres" id="7"]
+ [ext_resource type="Script" path="res://scripts/environment/path_ribbon.gd" id="8"]
+ [ext_resource type="Material" path="res://assets/materials/path.tres" id="9"]
+ [ext_resource type="Material" path="res://assets/materials/clearing.tres" id="10"]
+ [ext_resource type="Material" path="res://assets/materials/rock.tres" id="11"]
+ [ext_resource type="Material" path="res://assets/materials/ember.tres" id="12"]
+@@ -17,16 +18,18 @@
+ [ext_resource type="Script" path="res://scripts/ui/composition_guides.gd" id="18"]
+ [ext_resource type="Script" path="res://scripts/ui/dev_panel.gd" id="19"]
+ 
+ [ext_resource type="Script" path="res://scripts/camera/viewpoint.gd" id="viewpoint"]
+ [ext_resource type="Script" path="res://scripts/camera/scout_camera.gd" id="scout"]
+ [ext_resource type="Shader" path="res://assets/shaders/value_view.gdshader" id="value_shader"]
+ 
+ [ext_resource type="Shader" path="res://assets/shaders/gradient_sky.gdshader" id="sky_shader"]
++[ext_resource type="Script" path="res://scripts/environment/grass_field.gd" id="grass_script"]
++[ext_resource type="Image" path="res://assets/grass/playground_grass.res" id="grass_mask"]
+ [ext_resource type="Shader" path="res://assets/shaders/ground_mist.gdshader" id="mist_shader"]
+ [ext_resource type="Script" path="res://scripts/effects/flicker_light.gd" id="flicker"]
+ 
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/tree_spruce_a.tscn" id="kit_tree_spruce_a"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/tree_spruce_b.tscn" id="kit_tree_spruce_b"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/tree_larch.tscn" id="kit_tree_larch"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_a.tscn" id="kit_rock_boulder_a"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_b.tscn" id="kit_rock_boulder_b"]
+@@ -286,16 +289,17 @@
+ [node name="Sun" type="DirectionalLight3D" parent="."]
+ transform = Transform3D(-0.7071, -0.2418, 0.6645, 0, 0.9397, 0.342, -0.7071, 0.2418, -0.6645, 0, 0, 0)
+ light_color = Color(1, 0.88, 0.74, 1)
+ light_energy = 1.6
+ shadow_enabled = true
+ directional_shadow_max_distance = 140.0
+ 
+ [node name="Ground" type="StaticBody3D" parent="."]
++collision_layer = 3
+ 
+ [node name="Mesh" type="MeshInstance3D" parent="Ground"]
+ mesh = SubResource("PlaneMesh_2")
+ material_override = ExtResource("7")
+ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0)
+ 
+ [node name="Shape" type="CollisionShape3D" parent="Ground"]
+ shape = SubResource("WorldBoundaryShape3D_3")
+@@ -1262,16 +1266,26 @@
+ material_override = ExtResource("16")
+ transform = Transform3D(27.996, 0, 0.7566, 0, 16, 0, -0.4708, 0, 44.9936, 82, 0, 35)
+ 
+ [node name="Ridge11" type="MeshInstance3D" parent="Background"]
+ mesh = SubResource("SphereMesh_14")
+ material_override = ExtResource("16")
+ transform = Transform3D(67.8512, 0, 19.7096, 0, 22, 0, -59.1288, 0, 22.6171, 0, 0, 115)
+ 
++[node name="Wind" type="Node" parent="."]
++script = ExtResource("wind_script")
++strength = 0.6
++
++[node name="Grass" type="Node3D" parent="."]
++transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 6)
++script = ExtResource("grass_script")
++extent = Vector2(74, 104)
++mask = ExtResource("grass_mask")
++
+ [node name="Mist" type="FogVolume" parent="."]
+ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -5)
+ size = Vector3(84, 4, 124)
+ material = SubResource("mist_material")
+ 
+ [node name="Bounds" type="StaticBody3D" parent="."]
+ 
+ [node name="North" type="CollisionShape3D" parent="Bounds"]
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_compare_pair.gd tests/test_compare_pair.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_compare_pair.gd	2026-11-08 11:21:39.664024100 +0800
++++ tests/test_compare_pair.gd	2026-11-08 12:06:56.653960900 +0800
+@@ -1,15 +1,25 @@
+ extends "res://tests/case.gd"
+ 
+ 
++var _clipboard := ""
++
++
+ func before_each(pg) -> void:
++	if DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD):  # the headless display server has none
++		_clipboard = DisplayServer.clipboard_get()
+ 	pg.compare.clear()
+ 
+ 
++func after_each(_pg) -> void:
++	if DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD):
++		DisplayServer.clipboard_set(_clipboard)
++
++
+ func test_log_row_format(_pg) -> void:
+ 	var lines: Array[String] = ["a: 1 → 2", "b: on → off"]
+ 	var row := Compare.log_row(lines)
+ 	check(row.begins_with("| 20"), "starts with the date")
+ 	check(row.ends_with("| | a: 1 → 2, b: on → off | | |"), "only the Changed column is filled")
+ 
+ 
+ func test_save_pair_without_a_does_nothing(pg) -> void:
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_grass_brush.gd tests/test_grass_brush.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_grass_brush.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_grass_brush.gd	2026-11-08 11:45:19.393765000 +0800
+@@ -0,0 +1,51 @@
++extends "res://tests/case.gd"
++## GrassBrush: dab spacing within a stroke, the before/after pair a stroke hands to undo, and the
++## brush ray against the ground layer. Each test builds its own 16 m field on the Ground plane in
++## front of the start (the same fixture as test_grass_field.gd).
++
++var f: GrassField
++
++
++func before_each(pg) -> void:
++	f = GrassField.new()
++	f.extent = Vector2(16, 16)
++	f.position = Vector3(0, 0, -6)
++	pg.add_child(f)
++	await frames(2)
++	f.ensure_mask()
++
++
++func after_each(_pg) -> void:
++	if is_instance_valid(f):
++		f.get_parent().remove_child(f)
++		f.free()
++
++
++func test_dabs_respect_spacing(pg) -> void:
++	var b := GrassBrush.new()
++	b.strength = 0.2
++	b.begin(f)
++	b.dab(f.global_position)
++	var once := f.sample(Vector2(0, -6)).x
++	b.dab(f.global_position + Vector3(0.1, 0, 0))  # closer than radius * 0.25
++	check_near(f.sample(Vector2(0, -6)).x, once, 0.001, "a dab too close to the last is skipped")
++
++
++func test_stroke_undo_restores_mask_and_blades(pg) -> void:
++	var b := GrassBrush.new()
++	b.strength = 1.0
++	b.begin(f)
++	for x in range(-4, 5, 2):
++		b.dab(f.global_position + Vector3(x, 0, 0))
++	var pair := b.end()
++	check(pair[0].get_data() != pair[1].get_data(), "stroke changed the mask")
++	check(f.blade_count() > 0, "stroke grew blades")
++	f.set_mask_data(pair[0])
++	check_eq(f.mask.get_data(), pair[0].get_data(), "undo restores the exact mask")
++	check_eq(f.blade_count(), 0, "undo removes the blades")
++
++
++func test_ray_to_ground(pg) -> void:
++	var hit = GrassBrush.ray_to_ground(f, Vector3(0, 10, -6), Vector3.DOWN)
++	check(hit is Vector3 and absf(hit.y) < 0.05, "brush ray lands on the Ground plane")
++	check(GrassBrush.ray_to_ground(f, Vector3(0, 10, -6), Vector3.UP) == null, "ray into the sky misses")
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_grass_field.gd tests/test_grass_field.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_grass_field.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_grass_field.gd	2026-11-08 11:34:53.943902600 +0800
+@@ -0,0 +1,93 @@
++extends "res://tests/case.gd"
++## GrassField: painting the RG mask, the ground height cache, reproducible blades per chunk and
++## partial rebuilds. Each test builds its own 16 m field on the Ground plane in front of the start.
++
++var f: GrassField
++
++
++func before_each(pg) -> void:
++	f = GrassField.new()
++	f.extent = Vector2(16, 16)
++	f.position = Vector3(0, 0, -6)
++	pg.add_child(f)
++	await frames(2)
++	f.ensure_mask()
++
++
++func after_each(_pg) -> void:
++	if is_instance_valid(f):
++		f.get_parent().remove_child(f)
++		f.free()
++
++
++func test_paint_density_reaches_target_at_centre(pg) -> void:
++	var r := f.paint(f.global_position, 2.0, GrassField.PaintMode.DENSITY, 1.0, 1.0)
++	check(r.has_area(), "a changed rect is returned")
++	check_near(f.sample(Vector2(0, -6)).x, 1.0, 0.01, "full strength reaches the target at the centre")
++	check_near(f.sample(Vector2(3, -6)).x, 0.0, 0.01, "nothing outside the radius")
++
++
++func test_erase_and_height_modes(pg) -> void:
++	f.paint(f.global_position, 2.0, GrassField.PaintMode.DENSITY, 1.0, 1.0)
++	f.paint(f.global_position, 2.0, GrassField.PaintMode.HEIGHT, 0.0, 1.0)
++	check_near(f.sample(Vector2(0, -6)).y, 0.0, 0.01, "height mode moves G only")
++	check_near(f.sample(Vector2(0, -6)).x, 1.0, 0.01, "density untouched by height mode")
++	f.paint(f.global_position, 2.0, GrassField.PaintMode.ERASE, 1.0, 1.0)
++	check_near(f.sample(Vector2(0, -6)).x, 0.0, 0.01, "erase zeroes density")
++
++
++func test_paint_clips_at_field_edge(pg) -> void:
++	var r := f.paint(f.global_position + Vector3(8, 0, 0), 30.0, GrassField.PaintMode.DENSITY, 1.0, 1.0)
++	check(Rect2i(Vector2i.ZERO, f.mask_size()).encloses(r), "rect clipped to the mask")
++	var off := f.paint(f.global_position + Vector3(100, 0, 0), 2.0, GrassField.PaintMode.DENSITY, 1.0, 1.0)
++	check(not off.has_area(), "painting fully off the field changes nothing")
++
++
++func test_blades_follow_density_and_are_reproducible(pg) -> void:
++	check_eq(f.blade_count(), 0, "empty mask = no blades")
++	f.paint(f.global_position, 4.0, GrassField.PaintMode.DENSITY, 1.0, 1.0)
++	f.rebuild()
++	var n := f.blade_count()
++	check(n > 0, "painted area grows blades")
++	f.rebuild()
++	check_eq(f.blade_count(), n, "same mask + seed = same blades")
++	var mm := f.chunk_instance(Vector2i(0, 0)).multimesh
++	var t0 := mm.get_instance_transform(0)
++	f.rebuild()
++	check(f.chunk_instance(Vector2i(0, 0)).multimesh.get_instance_transform(0).is_equal_approx(t0), "same first blade")
++
++
++func test_heights_follow_mask(pg) -> void:
++	# Falloff 0: the whole disc is at full value. Height is painted wider than density so the
++	# bilinear sample at the density disc's rim doesn't blend in the unpainted mid height.
++	f.paint(f.global_position, 4.0, GrassField.PaintMode.DENSITY, 1.0, 1.0, 0.0)
++	f.paint(f.global_position, 6.0, GrassField.PaintMode.HEIGHT, 1.0, 1.0, 0.0)
++	f.rebuild()
++	var mm := f.chunk_instance(Vector2i(0, 0)).multimesh
++	for i in mini(mm.instance_count, 50):
++		var h := mm.get_instance_transform(i).basis.y.length()
++		check(h >= f.max_height * 0.84 and h <= f.max_height * 1.16, "tall paint = max_height ± jitter")
++
++
++func test_no_blades_where_ground_missing(pg) -> void:
++	# The Ground collider is an infinite WorldBoundaryShape3D, so moving off the 400 m plane still
++	# hits it; ray against an unused layer as well, so nothing is ground here.
++	f.position = Vector3(500, 0, 500)  # beyond the 400 m Ground plane
++	f.ground_layer = 20
++	f.refresh_ground()
++	f.paint(f.global_position, 4.0, GrassField.PaintMode.DENSITY, 1.0, 1.0)
++	f.rebuild()
++	check_eq(f.blade_count(), 0, "no ground hit = no blades")
++	check(is_nan(f.ground_height_at(Vector2(500, 500))), "missing ground reads NAN")
++
++
++func test_partial_rebuild_touches_only_affected_chunks(pg) -> void:
++	f.extent = Vector2(48, 16)  # three chunks in X
++	f.ensure_mask()
++	f.paint(f.global_position + Vector3(-16, 0, 0), 3.0, GrassField.PaintMode.DENSITY, 1.0, 1.0)
++	f.rebuild()
++	var far := f.chunk_instance(Vector2i(0, 0))
++	check(far != null, "the first stroke grew the -X chunk")
++	var r := f.paint(f.global_position + Vector3(16, 0, 0), 3.0, GrassField.PaintMode.DENSITY, 1.0, 1.0)
++	f.rebuild(r)
++	check(f.chunk_instance(Vector2i(0, 0)) == far, "untouched chunk keeps its node")
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_grass_scene.gd tests/test_grass_scene.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_grass_scene.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_grass_scene.gd	2026-11-08 11:41:45.223874800 +0800
+@@ -0,0 +1,35 @@
++extends "res://tests/case.gd"
++## The starter meadow in the playground: loaded from file, off the path and clearing, on the mounds.
++
++
++func test_playground_has_grass(pg) -> void:
++	await frames(2)
++	check(pg.grass.mask != null and pg.grass.mask.resource_path.ends_with("playground_grass.res"), "mask loaded from file")
++	check(pg.grass.blade_count() > 10000, "the starter field is populated")
++
++
++func test_grass_visible_param(pg) -> void:
++	check_eq(pg.PARAM_ORDER.find("grass_visible"), pg.PARAM_ORDER.find("props_visible") + 1, "param order")
++	pg.set_param("grass_visible", false)
++	check(not pg.grass.visible, "toggle hides the field")
++	pg.reset_scene()
++	check(pg.grass.visible, "default is on")
++
++
++func test_path_is_clear_of_grass(pg) -> void:
++	for node_name in ["Path", "SideTrail"]:
++		var pts: PackedVector2Array = pg.get_node(node_name).get_centerline_world()
++		for p in pts:
++			check_near(pg.grass.sample(p).x, 0.0, 0.01, "no grass on the %s centreline" % node_name)
++
++
++func test_clearing_is_clear_of_grass(pg) -> void:
++	var c: Vector3 = pg.get_node("Clearing").global_position
++	for off in [Vector2.ZERO, Vector2(6, 0), Vector2(0, -7), Vector2(-5, 5)]:
++		check_near(pg.grass.sample(Vector2(c.x, c.z) + off).x, 0.0, 0.01, "no grass in the clearing")
++
++
++func test_grass_on_mounds(pg) -> void:
++	await frames(2)
++	var m: Node3D = pg.get_node("Terrain/Mound1")
++	check(pg.grass.ground_height_at(Vector2(m.global_position.x, m.global_position.z)) > 0.2, "cache sees the mound")
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_grass_wind.gd tests/test_grass_wind.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_grass_wind.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_grass_wind.gd	2026-11-08 11:39:47.181434500 +0800
+@@ -0,0 +1,76 @@
++extends "res://tests/case.gd"
++## Grass reacts to the shared wind: strength and direction change the rendered field.
++
++var f: GrassField
++
++
++func before_each(pg) -> void:
++	pg.player.visible = false
++	var cam: Camera3D = pg.get_viewport().get_camera_3d()
++	var forward := -cam.global_basis.z
++	var flat := Vector2(forward.x, forward.z)
++	flat = flat.normalized() if flat.length() > 0.001 else Vector2(0, -1)
++	var centre := Vector2(cam.global_position.x, cam.global_position.z) + flat * 8.0
++	f = GrassField.new()
++	f.extent = Vector2(16, 16)
++	f.position = Vector3(centre.x, 0.0, centre.y)
++	pg.add_child(f)
++	await frames(2)
++	f.ensure_mask()
++	f.paint(f.global_position, 20.0, GrassField.PaintMode.DENSITY, 1.0, 1.0, 0.0)
++	f.rebuild()
++
++
++func after_each(pg) -> void:
++	pg.player.visible = true
++	if is_instance_valid(f):
++		f.get_parent().remove_child(f)
++		f.free()
++
++
++func test_wind_moves_the_grass(pg) -> void:
++	if not needs_window():
++		return
++	pg.set_param("wind", 0.0)
++	var calm := await _grab(pg)
++	pg.set_param("wind", 2.0)
++	var windy := await _grab(pg)
++	check(_mean_abs_diff(calm, windy) > 0.01, "strong wind visibly changes the field")
++
++
++func test_direction_moves_the_grass(pg) -> void:
++	if not needs_window():
++		return
++	pg.set_param("wind", 1.5)
++	pg.set_param("wind_direction", 0.0)
++	var a := await _grab(pg)
++	pg.set_param("wind_direction", 180.0)
++	var b := await _grab(pg)
++	check(_mean_abs_diff(a, b) > 0.01, "opposite directions lean the field differently")
++
++
++func test_shader_exposes_wind_and_fade_uniforms(_pg) -> void:
++	var src := FileAccess.get_file_as_string("res://assets/shaders/grass.gdshader")
++	check(src.contains("wind.gdshaderinc"), "grass shares the gust include")
++	for name in ["bend", "flutter", "highlight", "fade_start", "fade_end"]:
++		check(src.contains("uniform float " + name), "uniform " + name)
++	var mat: ShaderMaterial = f.chunk_instance(Vector2i(0, 0)).material_override
++	check_near(mat.get_shader_parameter("fade_start"), f.fade_start, 0.001, "fade_start passed through")
++	check_near(mat.get_shader_parameter("fade_end"), f.fade_end, 0.001, "fade_end passed through")
++
++
++## The middle third of the frame horizontally, over the lower part where the field sits (the
++## sky and trees above it do not move).
++func _grab(pg) -> Image:
++	var image: Image = await pg.compare.render_state(pg.get_state())
++	var s := image.get_size()
++	return image.get_region(Rect2i(s.x / 3, s.y / 2, s.x / 3, s.y * 2 / 5))
++
++
++func _mean_abs_diff(a: Image, b: Image) -> float:
++	var total := 0.0
++	var n := a.get_width() * a.get_height()
++	for y in a.get_height():
++		for x in a.get_width():
++			total += absf(ValueProbe.luminance(a.get_pixel(x, y)) - ValueProbe.luminance(b.get_pixel(x, y)))
++	return total / maxf(n, 1.0)
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_ground.gd tests/test_ground.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_ground.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_ground.gd	2026-11-08 11:28:29.465444500 +0800
+@@ -0,0 +1,28 @@
++extends "res://tests/case.gd"
++## Walkable ground (the Ground plane and the terrain mounds) is on physics layers 1 + 2.
++## Grass and the brush ray against layer 2 only; boulders and props are not ground.
++
++
++func _ray(pg, xz: Vector2, mask := 2) -> Dictionary:
++	var q := PhysicsRayQueryParameters3D.create(Vector3(xz.x, 40, xz.y), Vector3(xz.x, -5, xz.y), mask)
++	return pg.get_world_3d().direct_space_state.intersect_ray(q)
++
++
++func test_mounds_are_ground(pg) -> void:
++	await frames(2)
++	var mound: Node3D = pg.get_node("Terrain/Mound1")
++	var hit := _ray(pg, Vector2(mound.global_position.x, mound.global_position.z))
++	check(not hit.is_empty(), "ray on layer 2 hits Mound1")
++	check(hit.get("position", Vector3.ZERO).y > 0.2, "hit is on top of the mound, not the plane")
++
++
++func test_ground_plane_is_ground(pg) -> void:
++	await frames(2)
++	check(not _ray(pg, Vector2(0, 0)).is_empty(), "the Ground plane is on layer 2")
++
++
++func test_boulders_are_not_ground(pg) -> void:
++	await frames(2)
++	var boulder: Node3D = pg.get_node("Hero/Boulder1")
++	var hit := _ray(pg, Vector2(boulder.global_position.x, boulder.global_position.z))
++	check(hit.get("position", Vector3.ONE).y < 0.2, "a layer-2 ray passes through boulders to the ground")
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_profile.gd tests/test_profile.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_profile.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_profile.gd	2026-11-08 11:53:30.927917200 +0800
+@@ -0,0 +1,22 @@
++extends "res://tests/case.gd"
++
++
++func test_table_format(_pg) -> void:
++	var rows: Array[Dictionary] = [
++		{"view": "Camp", "grass": true, "fps": 300.0, "cpu_ms": 1.5, "gpu_ms": 1.234, "draws": 400, "prims": 900000},
++		{"view": "Camp", "grass": false, "fps": 400.0, "cpu_ms": 1.2, "gpu_ms": 0.9, "draws": 300, "prims": 500000},
++	]
++	var lines := PerfHud.table(rows).strip_edges().split("\n")
++	check_eq(lines.size(), 4, "header + separator + 2 rows")
++	check(lines[1].begins_with("|") and lines[1].contains("---"), "separator row")
++	check(lines[2].contains("1.23"), "gpu_ms to 2 decimals")
++
++
++func test_measure_reads_gpu(pg) -> void:
++	if not needs_window():
++		return
++	var was: bool = pg.perf_hud.visible
++	var result: Dictionary = await pg.perf_hud.measure(10)
++	check(result.gpu_ms > 0.0, "gpu_ms > 0: %s" % result)
++	check(result.draws > 0, "draws > 0")
++	check_eq(pg.perf_hud.visible, was, "visibility restored")
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_stage8_leftovers.gd tests/test_stage8_leftovers.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_stage8_leftovers.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_stage8_leftovers.gd	2026-11-08 12:00:51.786804800 +0800
+@@ -0,0 +1,136 @@
++extends "res://tests/case.gd"
++## Regression tests for the minors deferred from the Stage 8 review.
++
++
++func before_each(pg) -> void:
++	pg.compare.clear()
++	if pg.compare.split:
++		await pg.compare.toggle_split()
++
++
++func after_each(pg) -> void:
++	if pg.compare.split:
++		await pg.compare.toggle_split()
++	pg.compare.clear()
++	pg.set_param("light_gizmos", false)
++
++
++func _vertex_count(mesh: Mesh) -> int:
++	if mesh.get_surface_count() == 0:
++		return 0
++	var arrays := mesh.surface_get_arrays(0)
++	return (arrays[Mesh.ARRAY_VERTEX] as PackedVector3Array).size()
++
++
++# Minor 1: the camera is sampled before the blink, so a move during it is noticed afterwards.
++func test_player_move_during_capture_recaptures(pg) -> void:
++	if not needs_window():
++		return
++	pg.compare.pin()
++	await pg.compare.toggle_split()
++	await seconds(Compare.RECAPTURE_DELAY + 0.3)  # settle: nothing pending
++	var start: Vector3 = pg.player.global_position
++	var captures := [0]
++	var counter := func() -> void: captures[0] += 1
++	pg.compare.changed.connect(counter)
++	pg.compare.capture_a()  # not awaited
++	await frames(1)
++	pg.player.global_position += Vector3(2, 0, 0)
++	await frames(Compare.SETTLE_FRAMES + 5)
++	await seconds(Compare.RECAPTURE_DELAY + 0.3)
++	pg.compare.changed.disconnect(counter)
++	pg.player.global_position = start
++	check(captures[0] >= 2, "a move during the capture triggers another one (got %d)" % captures[0])
++
++
++# Minor 5: gizmos are an overlay, and follow lights that come and go.
++func test_gizmos_hidden_in_captures(pg) -> void:
++	pg.set_param("light_gizmos", true)
++	pg.hide_overlays()
++	check(not pg.light_gizmos.visible, "hidden while capturing")
++	pg.restore_overlays()
++	check(pg.light_gizmos.visible, "back after the capture")
++
++
++func test_gizmos_pick_up_new_lights(pg) -> void:
++	if not needs_window():
++		return
++	pg.set_param("light_gizmos", true)
++	await frames(2)
++	var before := _vertex_count(pg.light_gizmos.mesh)
++	var light := OmniLight3D.new()
++	pg.add_child(light)
++	await frames(2)
++	var added := _vertex_count(pg.light_gizmos.mesh)
++	light.free()
++	await frames(2)
++	var removed := _vertex_count(pg.light_gizmos.mesh)
++	check(added > before, "new light drawn (%d -> %d)" % [before, added])
++	check_eq(removed, before, "removed light no longer drawn")
++
++
++# Minor 6: a failed save is reported, not swallowed.
++func test_save_sheet_reports_failure(_pg) -> void:
++	expect_error("Can't save")
++	var result := Compare.save_sheet(Image.create(4, 4, false, Image.FORMAT_RGB8), "user://no/such/dir/x.png")
++	check(result.contains("Could not save"), "failure message, got '%s'" % result)
++
++
++# Minor 2: the perf readout sits under the view HUD, whatever its height.
++func test_perf_readout_clears_view_hud(pg) -> void:
++	var start: String = pg.get_param("view")
++	pg.set_param("perf_hud", true)
++	for view_name in pg.view_names():
++		pg.set_param("view", view_name)
++		await frames(2)
++		var hud_bottom: float = pg._hud.get_global_rect().end.y
++		var perf_top: float = pg.perf_hud.get_global_rect().position.y
++		check(perf_top >= hud_bottom, "%s: readout at %.0f, HUD ends at %.0f" % [view_name, perf_top, hud_bottom])
++	pg.set_param("perf_hud", false)
++	pg.set_param("view", start)
++
++
++# Minor 3: an unreadable user presets file is shown, not silently treated as empty.
++const BAD_PATH := "user://bad_presets.cfg"
++const TYPED_PATH := "user://test_typed_presets.cfg"
++
++
++func _remove(path: String) -> void:
++	if FileAccess.file_exists(path):
++		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
++
++
++func test_unreadable_presets_file_is_reported(pg) -> void:
++	expect_error("ConfigFile parse")
++	var f := FileAccess.open(BAD_PATH, FileAccess.WRITE)
++	f.store_string("[broken")
++	f.close()
++	var original: String = pg.preset_path
++	pg.preset_path = BAD_PATH
++	pg.panel.refresh_presets()
++	var text: String = pg.panel.status_text()
++	pg.preset_path = original
++	pg.panel.refresh_presets()
++	_remove(BAD_PATH)
++	check(text.contains("Can't read"), "status says the file can't be read, got '%s'" % text)
++
++
++# Minor 4: a hand-edited, wrong-typed value is skipped with a note.
++func test_wrong_typed_preset_value_is_skipped(pg) -> void:
++	var cfg := ConfigFile.new()
++	cfg.set_value("Bad", "wind_direction", "north")
++	cfg.set_value("Bad", "wind", 1.2)
++	cfg.save(TYPED_PATH)
++	var original: String = pg.preset_path
++	pg.preset_path = TYPED_PATH
++	pg.reset_scene()
++	pg.apply_preset("Bad")
++	var direction: float = pg.get_param("wind_direction")
++	var wind: float = pg.get_param("wind")
++	var text: String = pg.panel.status_text()
++	pg.preset_path = original
++	pg.reset_scene()
++	_remove(TYPED_PATH)
++	check_near(direction, 53.13, 0.01, "direction unchanged")
++	check_near(wind, 1.2, 0.001, "the valid value applied")
++	check(text.contains("Skipped wind_direction"), "status notes the skip, got '%s'" % text)
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_value_probe.gd tests/test_value_probe.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_value_probe.gd	2026-11-08 11:21:39.664024100 +0800
++++ tests/test_value_probe.gd	2026-11-08 12:00:05.200156600 +0800
+@@ -55,8 +55,38 @@
+ 		return
+ 	pg.set_param("probe", true)
+ 	await frames(3)
+ 	var start := Time.get_ticks_usec()
+ 	pg.probe.sample()
+ 	var ms := (Time.get_ticks_usec() - start) / 1000.0
+ 	print("     probe sample: %.1f ms" % ms)
+ 	check(ms < 60.0, "one probe sample stays under 60 ms (got %.1f)" % ms)
++
++
++func test_measure_known_gradient(_pg) -> void:
++	var image := Image.create_empty(100, 1, false, Image.FORMAT_RGB8)
++	for x in 100:
++		var g := x / 99.0
++		image.set_pixel(x, 0, Color(g, g, g))
++	var s := ValueProbe.measure(image)
++	check_near(s["p5"], 5 / 99.0, 0.005, "p5 is pixel 5")
++	check_near(s["p50"], 50 / 99.0, 0.005, "p50 is pixel 50")
++	check_near(s["p95"], 95 / 99.0, 0.005, "p95 is pixel 95")
++	var total := 0
++	for count in s["hist"]:
++		total += count
++	check_eq(total, 100, "every pixel is in the histogram")
++
++
++func test_measure_is_fast(_pg) -> void:
++	var image := Image.create_empty(200, 113, false, Image.FORMAT_RGBA8)
++	image.fill(Color(0.4, 0.5, 0.6))
++	var exclude: Array[Rect2] = [Rect2(0, 0, 40, 113), Rect2(150, 10, 40, 30), Rect2(60, 80, 70, 20)]
++	var start := Time.get_ticks_usec()
++	var s := ValueProbe.measure(image, exclude)
++	var ms := (Time.get_ticks_usec() - start) / 1000.0
++	print("     measure: %.2f ms" % ms)
++	check(ms < 4.0, "measure() under 4 ms (got %.2f)" % ms)
++	var total := 0
++	for count in s["hist"]:
++		total += count
++	check_eq(total, 200 * 113 - 40 * 113 - 40 * 30 - 70 * 20, "excluded pixels not counted")
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_wind.gd tests/test_wind.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_wind.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_wind.gd	2026-11-08 11:24:14.746597200 +0800
+@@ -0,0 +1,55 @@
++extends "res://tests/case.gd"
++## Wind has a direction (a compass angle) and a shared gust field that scrolls with it.
++
++
++func test_compass_convention(_pg) -> void:
++	check(Wind.vector_for(0.0).is_equal_approx(Vector2(0, -1)), "0° blows toward -Z")
++	check(Wind.vector_for(90.0).is_equal_approx(Vector2(1, 0)), "90° blows toward +X")
++	check(Wind.vector_for(53.13).distance_to(Vector2(0.8, -0.6)) < 0.001, "default = old WIND_DIR")
++
++
++func test_direction_param_is_state(pg) -> void:
++	var i: int = pg.PARAM_ORDER.find("wind_direction")
++	check_eq(i, pg.PARAM_ORDER.find("wind") + 1, "wind_direction right after wind")
++	check_near(pg.get_param("wind_direction"), 53.13, 0.01, "default direction")
++	pg.set_param("wind_direction", 90.0)
++	# (RenderingServer.global_shader_parameter_get is editor-only and errors in a running game.)
++	check(pg.wind.vector().is_equal_approx(Vector2(1, 0)), "Wind node follows the param")
++	pg.reset_scene()
++	check_near(pg.get_param("wind_direction"), 53.13, 0.01, "reset restores direction")
++
++
++func test_old_preset_keeps_default_direction(pg) -> void:
++	pg.set_param("wind_direction", 200.0)
++	pg.apply_preset("Wide Reveal")  # has no wind_direction key
++	check_near(pg.get_param("wind_direction"), 53.13, 0.01, "missing key falls back to default")
++
++
++func test_motes_and_mist_follow_direction(pg) -> void:
++	pg.set_param("wind", 1.0)
++	pg.set_param("wind_direction", 90.0)
++	var gravity: Vector3 = pg.motes.process_material.gravity
++	check_near(gravity.x, pg.MOTE_DRIFT, 0.001, "motes pushed toward +X")
++	check_near(gravity.z, 0.0, 0.001, "no Z push at 90°")
++	var before: Vector3 = pg.mist.material.get_shader_parameter("offset")
++	await frames(10)
++	var after: Vector3 = pg.mist.material.get_shader_parameter("offset")
++	check(after.x < before.x, "mist noise scrolls with the wind (offset decreases along +X)")
++	check_near(after.z, before.z, 0.0001, "mist doesn't drift in Z at 90°")
++
++
++func test_gust_offset_has_no_jump(pg) -> void:
++	pg.set_param("wind", 0.5)
++	await frames(2)
++	var before: Vector2 = pg.wind.offset
++	pg.set_param("wind", 2.0)
++	pg.set_param("wind_direction", pg.get_param("wind_direction") + 180.0)
++	await frames(1)
++	check(pg.wind.offset.distance_to(before) < 1.0, "offset keeps integrating; no jump")
++
++
++func test_no_hardcoded_wind_dir(pg) -> void:
++	check(not pg.get_script().get_script_constant_map().has("WIND_DIR"), "WIND_DIR constant removed")
++	var src := FileAccess.get_file_as_string("res://assets/materials/flat_color.gdshader")
++	check(not src.contains("WIND_DIR"), "flat_color uses wind_direction")
++	check(src.contains("wind.gdshaderinc"), "flat_color shares the gust include")
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/project.godot	2026-11-08 11:21:39.669043800 +0800
++++ project.godot	2026-11-08 12:03:20.197051900 +0800
+@@ -23,16 +23,20 @@
+ 
+ window/size/viewport_width=1600
+ window/size/viewport_height=900
+ 
+ [dotnet]
+ 
+ project/assembly_name="Environment Forge"
+ 
++[editor_plugins]
++
++enabled=PackedStringArray("res://addons/grass_painter/plugin.cfg")
++
+ [filesystem]
+ 
+ import/blender/enabled=false
+ 
+ [input]
+ 
+ move_forward={
+ "deadzone": 0.2,
+@@ -59,18 +63,31 @@
+ ]
+ }
+ sprint={
+ "deadzone": 0.2,
+ "events": [Object(InputEventKey,"resource_local_to_scene":false,"resource_name":"","device":-1,"window_id":0,"alt_pressed":false,"shift_pressed":false,"ctrl_pressed":false,"meta_pressed":false,"pressed":false,"keycode":0,"physical_keycode":4194325,"key_label":0,"unicode":0,"location":0,"echo":false,"script":null)
+ ]
+ }
+ 
++[layer_names]
++
++3d_physics/layer_1="world"
++3d_physics/layer_2="ground"
++
+ [rendering]
+ 
+ anti_aliasing/quality/msaa_3d=2
+ 
+ [shader_globals]
+ 
+ wind_strength={
+ "type": "float",
+ "value": 0.6
+ }
++wind_direction={
++"type": "vec2",
++"value": Vector2(0.8, -0.6)
++}
++wind_offset={
++"type": "vec2",
++"value": Vector2(0, 0)
++}
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/main.md	2026-11-08 11:21:39.673128900 +0800
++++ main.md	2026-11-08 12:03:34.050747000 +0800
+@@ -143,16 +143,18 @@
+ - Ritual Clearing.
+ 
+ Allow me to return to the default state easily.
+ 
+ Add screenshot capture or a simple comparison workflow if it can be implemented reliably without distracting from the core project.
+ 
+ Avoid building a database, complex preset manager, or custom editor plugin.
+ 
++Exception (Stage 9, approved): addons/grass_painter, a single-purpose grass mask painter. No other editor plugins.
++
+ ## 6. Procedural environment tools
+ 
+ Introduce procedural generation only after the manually arranged blockout is working.
+ 
+ Start with simple tools for:
+ 
+ - Scattering trees, rocks, and small props.
+ - Controlling density and minimum spacing.
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/README.md	2026-11-08 11:21:39.669043800 +0800
++++ README.md	2026-11-08 12:06:12.003810400 +0800
+@@ -1,28 +1,31 @@
+ # Environment Forge
+ 
+ A small Godot 4 playground for practising stylized environment art and level design:
+ composition, silhouettes, depth, lighting and atmosphere. The brief and staged roadmap live in
+-[main.md](main.md). **Current stage: 8 (comparison, presets, visual debugging).**
++[main.md](main.md). **Current stage: 9 (wind, painted grass, profiling, reuse).**
+ 
+ ## Run
+ 
+ - Engine: **Godot 4.6** (the mono build works; the project is pure GDScript).
+ - Open `project.godot` in Godot and press **F5**, or run from a terminal:
+ 
+ ```sh
+ Godot_v4.6-stable_mono_win64.exe --path D:/DevEnv/GDOT/environment-lab
+ ```
+ 
+ Optional command-line flags (after `--`):
+ 
+ ```sh
+ # apply a preset, render every viewpoint to screenshots/, then quit
+ Godot... --path . -- "--preset=Foggy Forest" --capture-views --quit
++
++# measure every fixed view with grass on then off, write screenshots/profile_<datetime>.md
++Godot... --path . --resolution 1920x1080 --disable-vsync -- --profile-views --quit
+ ```
+ 
+ ## Controls
+ 
+ | Input | Action |
+ | --- | --- |
+ | WASD / arrows | Move (relative to the active camera, cinematic views included) |
+ | Shift | Sprint |
+@@ -47,19 +50,19 @@
+ ## Dev panel
+ 
+ Each control below changes the scene.
+ 
+ - **Camera:** active view and FOV with its mm equivalent (applies to whichever camera is active). Gameplay-camera height, distance, pitch and **Shift X/Y** (lens shift: slides the frame without rotating it, so the player can sit on a third). Buttons for Scout and Bookmark.
+ - **Framing & Values:** grid (thirds, golden section, diagonals), aspect mask (2.39:1, 1.85:1, 4:3, 1:1), centre marker. Value view (grayscale, 3-value, notan) with *Value split*, the luminance where figure turns into sky, and *Squint*, a blur that removes detail.
+ - **Lighting:** sun energy, height (elevation), angle (azimuth) and colour. *Shadow fill* is ambient light, which takes the sky-top colour. Shadows on/off.
+ - **Atmosphere:** horizon/fog colour and sky-top colour (a gradient sky). *Sun glow* is a halo in the sky and scatter in the fog. Depth fog density, ground fog, *Light shafts* (volumetric fog on/off), shaft density, and *Drifting mist* (a volumetric ground mist that only shows while light shafts are on).
+-- **Motion:** *Wind* drives tree and cloth sway, mist drift and mote drift; gusts roll across the forest. Floating motes around the player. The altar ember and the player's lantern always flicker.
++- **Motion:** *Wind* drives tree and cloth sway, grass, mist drift and mote drift; gusts roll across the forest. *Wind direction* is a compass angle in degrees: the way the wind blows *toward*, 0 = toward -Z, 90 = toward +X, clockwise seen from above. Floating motes around the player. The altar ember and the player's lantern always flicker.
+ - **Supernatural:** *Monolith awake* switches the whole effect on/off (off = the hole shows sky again). *Spirits* sets how many wisps flow from the hole down to the altar ember. *Hole glow* scales the glowing core, its halo and the cold spotlight from the hole together; they breathe on a slow 6 s cycle. The spotlight's shaft only shows while *Light shafts* is on.
+-- **Environment:** landmark and props visibility (hidden props still collide). *Forest* switches between **Manual** (the hand-placed forest) and **Procedural** (scatter layers). *Seed* / *New seed*, *Tree density*, *Tree spacing*, *Clumping*, *Rock density*. *Show exclusion zones* draws the scatter masks in the world. The status line reports tree and rock counts after each regeneration.
++- **Environment:** landmark, props and grass visibility (hidden props still collide). *Forest* switches between **Manual** (the hand-placed forest) and **Procedural** (scatter layers). *Seed* / *New seed*, *Tree density*, *Tree spacing*, *Clumping*, *Rock density*. *Show exclusion zones* draws the scatter masks in the world. The status line reports tree and rock counts after each regeneration.
+ - **Presets:** Flat Overcast (the Stage 2 look, kept for before/after comparison), Wide Reveal, Low Silhouette, Golden Backlight, Foggy Forest, Ritual Clearing, Moonlit, Awakened (dusk; the Stage 7 money shot), and Reset (default state plus player back at spawn). Each preset stores only its overrides on top of the default "Cold Dawn" mood; edit them in `scripts/presets.gd`. A preset that switches to a fixed view keeps that view's authored lens. Type a name and press *Save preset* to keep the current settings: only what differs from the default (plus the view) goes into `presets/user_presets.cfg`. Saving with the same name overwrites; to delete a preset, edit that file. It lives under `res://`, so saving works when running from the project folder, never in an exported build.
+ - **Capture:** Screenshot, *All views* (one PNG per viewpoint, same lighting), and *Copy settings*, which copies the current state as text so you can paste it in as a new preset.
+ - **Compare:** *Pin A* (P), *Split* (Z) and *Save pair*, plus a live list of what differs between A and the live scene (B). A and B share the camera, the guides and the value view; a lens is compared only in the view where A was pinned. In split view A is a frozen render that re-renders (a short blink) when the camera stops or the value view changes. *Save pair* writes `screenshots/<stamp>_compare_<view>.png`: A and B side by side with the diff underneath. It also copies an experiment-log row (Date and Changed filled in) to the clipboard.
+ - **Debug:** *Render* mode, the *Value probe* (luminance under the cursor, frame p5/p50/p95 and a histogram with the notan *Value split* marked), the *Perf readout* (fps, CPU/GPU ms, draw calls, primitives) and *Light gizmos* (omni ranges, spot cones, sun direction, drawn through everything). None of these are part of presets, *Copy settings* or A/B. The probe reads the frame back from the GPU four times a second (about 15 ms each), so expect small hitches while it's on.
+ 
+ Colour roles are fixed on purpose:
+ - **Horizon = fog colour.** Distant forms dissolve into the sky behind them, which is what produces atmospheric perspective.
+ - **Sky top = shadow fill.** Shadows are lit by the sky, so they take its cool colour while the sun stays warm. That temperature contrast is most of what makes the scene feel alive.
+@@ -106,25 +109,30 @@
+   camera/follow_camera.gd    gameplay orbit camera with lens shift
+   camera/viewpoint.gd        fixed cinematic camera + intent note
+   camera/scout_camera.gd     free-fly camera for finding shots
+   effects/flicker_light.gd   noise flicker for fire / lantern lights
+   effects/breathe.gd         slow pulse for the hole glow: core emission + halo + spotlight
+   effects/spirit_stream.gd   @tool: feeds the spirit stream its source/target positions
+   environment/path_ribbon.gd @tool: builds the path mesh from editable points
+   environment/kit_asset.gd   @tool: swaps imported materials for palette materials by name
++  environment/wind.gd        @tool: strength, compass direction and the shared gust field (shader globals)
++  environment/grass_field.gd @tool: painted grass, chunked MultiMesh blades on layer-2 ground
++  environment/grass_brush.gd brush logic shared by the editor painter
+   procedural/scatter.gd      @tool: reproducible scatter layer (seeded, masked, ground-snapped)
+   procedural/exclusion_zone.gd @tool: circle / capsule / box keep-out area with soft edge
+   ui/dev_panel.gd            runtime panel, built in code
+   ui/composition_guides.gd   grids, centre marker, aspect masks
+   ui/compare_view.gd         split-screen overlay with a draggable divider
+   debug/debug_boot.gd        autoload: enables wireframes before any mesh loads
+   debug/value_probe.gd       cursor value, percentiles, histogram
+   debug/perf_hud.gd          fps, CPU/GPU ms, draw calls
+   debug/light_gizmos.gd      light ranges and cones drawn on top
++addons/grass_painter/       the one editor plugin: paints the grass mask (see Grass below)
++tools/make_starter_grass.gd  one-off script that wrote the starter meadow mask
+ presets/user_presets.cfg     saved presets (created on first save; plain text)
+ tests/                       run.gd (runner), case.gd (base), test_*.gd
+ assets/blender/              build_kit.py (procedural kit builder) + environment_kit.blend (git: source)
+ assets/meshes/               exported GLBs (generated by build_kit.py)
+ assets/materials/            flat_color.gdshader (faceted look, wind sway, tint variation) + palette
+ assets/shaders/              value_view (grayscale / 3-value / notan / squint),
+                              gradient_sky (horizon/zenith + sun halo), ground_mist (FogVolume),
+                              spirit_stream (particle path), spirit_wisp, light_halo
+@@ -146,16 +154,39 @@
+ ground. Every part of one object must use the same `sway` value: spruce trunk and foliage share
+ 0.35, and dead trees use 0.2. Otherwise the crown slides off the trunk. Rocks and the ground use 0
+ (rigid). Wind is a global shader parameter (`shader_globals/wind_strength` in Project Settings),
+ set at runtime by the Wind slider.
+ 
+ Performance (RTX 3070, 1600×900): about 850 fps with everything on. Volumetrics cost about
+ 0.13 ms per frame and wind sway about 0.07 ms.
+ 
++## Grass and wind
++
++`Grass` is a `GrassField`: a rectangle of blades driven by a painted mask (R = density, G = height),
++drawn as chunked MultiMeshes with a wind-driven shader. Blades sit on ground found by a ray against
++physics layer 2 (`ground`), so walkable ground needs collision on layers 1 + 2, and a spot with no
++ground gets no blade. The wind comes from the `Wind` node: strength, a compass direction and a gust
++field that travels with it, shared by the grass, trees and cloth. Direction is the angle the wind
++blows **toward**: 0 = toward -Z, 90 = toward +X, clockwise from above (default 53.13: mostly +X with a bit of -Z).
++Gusts show as waves rolling across the meadow.
++
++To repaint, select `Grass` in the editor (the *Grass Painter* plugin must be enabled):
++
++| Input | Action |
++| --- | --- |
++| Left-mouse drag | Paint with the toolbar's mode (Density / Height / Erase), radius, strength and target |
++| Shift + left-mouse drag | Erase (a clearing) |
++| `[` / `]` | Shrink / grow the brush radius |
++| Ctrl+Z | Undo the last stroke (one stroke = one step) |
++
++The mask is saved to its own `.res` at the end of every stroke. The starter meadow is written by
++`tools/make_starter_grass.gd`. Costs and budgets: [docs/PERFORMANCE.md](docs/PERFORMANCE.md). Moving
++this into a game level: [docs/REUSE.md](docs/REUSE.md).
++
+ ## Procedural scattering
+ 
+ `Scatter/Trees` and `Scatter/Rocks` are `Scatter` layers. Each throws seeded candidate points over
+ a rectangle and keeps a point with a probability shaped by:
+ 
+ | Mask | Purpose |
+ | --- | --- |
+ | Clumping noise (`clumping`, `clump_size`) | Groves and gaps instead of an even park |
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/docs/EXPERIMENT_LOG.md docs/EXPERIMENT_LOG.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/docs/EXPERIMENT_LOG.md	2026-11-08 11:21:39.736918700 +0800
++++ docs/EXPERIMENT_LOG.md	2026-11-08 12:06:12.114082100 +0800
+@@ -21,16 +21,33 @@
+ | 2026-10-10 | Where does new content go? | (ASCII occupancy map of the manual forest) | — | The emptiest region (x 20–38, z −12…−36) was the hole flagged in Stage 4. It became the abandoned camp, reached by a side trail. New content should fix a layout problem, not just fill space. |
+ | 2026-10-10 | Does the spirit banner work as a secondary landmark? | banner 14 m → 18 m | trees ≤ 16 m, monolith 26 m | At 14 m it hid below the canopy and wasn't visible from anywhere on the main path. At 18 m it clears the treeline at the fork, above the gate tree. From Reveal it's still lost in the dawn haze, which is acceptable for a *discovered* landmark. Height hierarchy: monolith > banner > trees. |
+ | 2026-10-10 | Do the processional posts read? | khadag cloth 0.2 × 1.1 m dark blue → 0.32 × 1.4 m lighter blue | positions | Small and dark, they read as dead sticks. Larger and lighter, they read as a line of blue markers leading to the clearing. A leading line only works if its elements read at the distance you see them. |
+ | 2026-10-10 | Does the camp story read on arrival? | (observation, Camp view) | Cold Dawn | You arrive from the west looking into the low dawn sun, so the ger, hearth and walls are glare and silhouettes. The banner reads; the details don't. **Open: a Stage 7 lighting decision.** |
+ | 2026-10-12 | Does the spirit stream read as spirits? | first pass: 60 wisps, one Bezier path | lights, cameras | Every wisp rode the same lane at the same pace: a rigid dotted line, like a power cable. Per-wisp lanes, paces and drift turned it into a loose drift. **Regularity reads as machinery; irregularity reads as life.** |
+ | 2026-10-12 | Does the hole read as light from far away? | hole emission 6 → 14 | Awakened, Long Lens | No visible change. The tonemapper flattens the core to a pale flat hexagon, so it reads as paint. Adding a soft halo that ignores depth fog made it read as a light source. Brightness alone doesn't say "light"; light spilling into the air around it does. |
+ | 2026-10-12 | Does the awake monolith fix the Stage 2 notan problem? | (measured, Cold Dawn) | default preset | Hole luminance 0.86 (Forest Gate) / 0.81 (Reveal) vs sky 0.60 and monolith body 0.51–0.58. The landmark now owns the brightest point in the frame, so it separates from the outcrop without changing the fog or sun. |
+ 
++## Stage 9 experiments to run
++
++Use one fixed view per experiment, change one thing, and pair it with Pin A / Z so the diff is explicit.
++
++1. **Across or along?** In Path Low, set *Wind direction* to 90 (across the path), then 0 or 180 (along it). Which
++   makes the waves read as a leading line toward the landmark, and which makes them read as a barrier?
++2. **When does motion become distraction?** In Forest Gate, raise *Wind* from 0.2 in steps of 0.2. Find the strength where
++   you stop noticing the grass and start noticing the *gusts*. Revisit the Stage 3 stillness test: how much motion is
++   atmosphere, and where does it start pulling the eye from the landmark?
++3. **Height as a frame.** Select `Grass`, paint the ring around the landmark with the *Height* brush, tall at the edge and
++   short near the foot. Does the tall grass frame it, or does it just hide the base? Compare against the starter meadow.
++4. **A clearing as a frame.** In Gate Thirds, Shift+LMB a clearing in the foreground meadow. Does the bare ground make
++   a stage for the gate, or a hole in the frame? Move the clearing and see which shot it helps.
++5. **Highlight vs notan.** Change the grass `tip_color` from dark to bright, then press V to switch to notan. At what
++   brightness does the grass stop reading as one dark mass and start competing with the path? Does it still
++   separate from the landmark?
++
+ ## Stage 8 experiments to run
+ 
+ 1. **Redo Stage 7 #1 as a pair.** In Forest Gate, pin A with *Monolith awake* on, switch it off, then *Save pair*. Paste
+    the copied row into the table above and write the Question and Result. Did seeing them side by side change your answer?
+ 2. **Palette or light?** Pick the view you like least. Look at it in *Unshaded*, then *Lighting*. Which one is the problem?
+    Fix only that one, then compare against the original with X.
+ 3. **Read the histogram.** Turn on the value probe in Reveal. Where is the big hump, and how much of the frame sits on
+    each side of the *Value split* line? Move the split until the landmark is on the light side alone.
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/docs/PERFORMANCE.md docs/PERFORMANCE.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/docs/PERFORMANCE.md	1970-01-01 08:00:00.000000000 +0800
++++ docs/PERFORMANCE.md	2026-11-08 11:54:56.606662900 +0800
+@@ -0,0 +1,79 @@
++# Performance
++
++Target: the game holds 60 fps on a mid-range PC.
++
++## Method
++
++`PerfHud.measure(frames)` averages CPU ms, GPU ms, draw calls and primitives over N frames, using the
++same sources as the on-screen perf HUD (CPU = viewport CPU render time + `get_frame_setup_time_cpu()`;
++GPU = viewport measured GPU render time). `--profile-views` visits every fixed view (Scout skipped),
++with grass on then off: settle 30 frames, measure 120, overlays hidden. Grass cost = GPU ms (on) minus
++GPU ms (off).
++
++Dev machine: RTX 3070, i7-12700F, **1920x1080**, vsync off. The FPS column is Godot's `TIME_FPS`
++monitor, which updates about once a second and lags view changes; trust the ms columns.
++
++## Budgets
++
++- Grass: at most 2.0 ms GPU.
++- Whole frame: at most 7.0 ms GPU in the worst named view.
++
++Rationale for "mid-range": 7 ms of GPU on an RTX 3070 is roughly 60 fps (16.7 ms) on a GTX 1660 or an
++RTX 3050, which are about 2.3x slower, leaving headroom for CPU and driver costs.
++
++## Result (wireframes on, 1920x1080)
++
++| View | Grass | FPS | CPU ms | GPU ms | Draws | Prims |
++|---|---|---:|---:|---:|---:|---:|
++| Gameplay | on | 68 | 0.38 | 1.77 | 469 | 366k |
++| Gameplay | off | 92 | 0.36 | 1.45 | 453 | 83k |
++| Reveal | on | 92 | 0.35 | 1.44 | 394 | 309k |
++| Reveal | off | 92 | 0.34 | 1.32 | 381 | 76k |
++| Long Lens | on | 258 | 0.25 | 1.30 | 203 | 96k |
++| Long Lens | off | 662 | 0.24 | 1.28 | 198 | 19k |
++| Path Low | on | 662 | 0.32 | 1.41 | 352 | 291k |
++| Path Low | off | 662 | 0.31 | 1.26 | 337 | 40k |
++| Forest Gate | on | 662 | 0.29 | 1.43 | 304 | 221k |
++| Forest Gate | off | 695 | 0.27 | 1.26 | 292 | 29k |
++| Gate Thirds | on | 708 | 0.25 | 1.49 | 260 | 204k |
++| Gate Thirds | off | 708 | 0.28 | 1.26 | 249 | 22k |
++| Clearing | on | 708 | 0.23 | 1.28 | 141 | 117k |
++| Clearing | off | 708 | 0.23 | 1.19 | 134 | 9k |
++| Landmark Foot | on | 732 | 0.21 | 1.07 | 73 | 64k |
++| Landmark Foot | off | 733 | 0.19 | 1.02 | 70 | 6k |
++| Camp | on | 733 | 0.20 | 1.33 | 92 | 73k |
++| Camp | off | 733 | 0.19 | 1.12 | 88 | 10k |
++| Overview | on | 733 | 0.33 | 1.22 | 269 | 66k |
++| Overview | off | 774 | 0.32 | 1.22 | 269 | 66k |
++
++- Worst grass cost: Gameplay, 0.32-0.40 ms GPU (budget 2.0). Next: Camp 0.21, Gate Thirds 0.23.
++- Worst whole frame: Gameplay with grass, 1.77-1.82 ms GPU (budget 7.0).
++- Both budgets are met with a wide margin, so **nothing was tuned**; grass defaults are unchanged
++  (24 blades/m2, fade 25/45).
++
++## Top 3 costs
++
++1. Gameplay (the follow camera sees the most grass and trees): 1.8 ms GPU, 469 draws, 366k prims.
++2. Reveal: 1.44 ms GPU, 394 draws, 309k prims.
++3. Path Low / Forest Gate: about 1.4 ms GPU, 300-350 draws. Grass is only 0.15-0.2 ms of that; the
++   rest is the shared scene (trees, shadows, fog).
++
++Grass is the largest primitive contributor (about 280k of Gameplay's 366k) but cheap per primitive.
++
++## Wireframe finding
++
++`RenderingServer.set_debug_generate_wireframes(true)` (needed for the F2 Wireframe view) was compared
++with `--no-wireframes`: the profile tables are the same within noise (Gameplay 1.77 vs 1.82 ms GPU,
++Gate Thirds grass cost 0.23 vs 0.24 ms), and startup is 2.26-2.50 s vs 2.23-2.39 s (3 runs each, wall
++clock, `--quit`), no measurable difference. It stays on by default; `--no-wireframes` skips it, and F2
++Wireframe then draws nothing useful.
++
++## Re-running
++
++```bash
++GODOT=/d/softwares/Godot_v4.6-stable_mono_win64/Godot_v4.6-stable_mono_win64_console.exe
++"$GODOT" --path . --disable-vsync --resolution 1920x1080 -- --profile-views --quit
++# add --no-wireframes after -- to compare
++```
++
++It prints the table and writes `screenshots/profile_<datetime>.md`.
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/docs/REUSE.md docs/REUSE.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/docs/REUSE.md	1970-01-01 08:00:00.000000000 +0800
++++ docs/REUSE.md	2026-11-08 12:06:12.034344500 +0800
+@@ -0,0 +1,47 @@
++# Reusing the grass and wind in a game level
++
++Everything the playground adds on top of a plain level is optional. This is the short list of what a
++game project needs from here.
++
++## What to copy
++
++- `scripts/environment/`: `wind.gd`, `grass_field.gd`, `grass_brush.gd`, `kit_asset.gd`
++- `assets/shaders/` (the wind include and grass shader live here) and `assets/materials/`
++- The kit scenes in `scenes/environment/kit/` you actually place
++- `addons/grass_painter/` (the editor brush; the only plugin, and it paints grass masks and nothing else)
++
++After copying, run `Godot --headless --path . --import` once so the new `class_name`s register.
++
++## Project settings
++
++- **Shader globals** (Project Settings > Shader Globals), all three are required, because the
++  materials read them:
++  - `wind_strength`, float, `0.6`
++  - `wind_direction`, vec2, `(0.8, -0.6)`
++  - `wind_offset`, vec2, `(0, 0)`
++- **Physics layer names:** layer 1 = `world`, layer 2 = `ground`.
++- **Plugin:** Project Settings > Plugins > enable *Grass Painter*.
++
++## The ground rule
++
++Grass finds the ground with a ray against **layer 2 only**. Walkable ground therefore needs collision
++on layers **1 + 2** (`collision_layer = 3`). Kit ground pieces (mounds) set `collision = true` so
++they carry it. Anything not on layer 2 (boulders, props) gets no grass on top of it, and a spot with
++no ground below gets no blade.
++
++## A new level in five steps
++
++1. Add a `Wind` node (strength, and direction as a compass angle: 0 = toward -Z, 90 = toward +X).
++2. Add a `GrassField` node.
++3. Set its `extent` (metres, centred on the node) to cover the area you want to paint.
++4. Select the `GrassField`. The Grass Painter toolbar appears in the 3D editor.
++5. Paint: LMB paints, Shift+LMB erases, `[` / `]` change the radius, Ctrl+Z undoes a stroke. Save the
++   mask (it is stored in its own `.res`) with the scene.
++
++## Playground-only parts
++
++Not needed in a game level: the dev panel, presets, Compare, the debug tools (value probe, perf HUD,
++light gizmos), the composition guides, and `tools/` (such as `make_starter_grass.gd`, which only
++writes this playground's starter meadow).
++
++Performance numbers for the grass are in [PERFORMANCE.md](PERFORMANCE.md).
+diff -ruN -U8 --strip-trailing-cr -x '*.uid' -x '*.import' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/assets/materials/flat_color.gdshader assets/materials/flat_color.gdshader
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/assets/materials/flat_color.gdshader	2026-11-08 11:21:39.303356700 +0800
++++ assets/materials/flat_color.gdshader	2026-11-08 11:23:51.102353100 +0800
+@@ -1,46 +1,43 @@
+ // Faceted, single-colour stylized surface.
+ // Normals are rebuilt per-face from screen derivatives, so smooth primitives
+ // (spheres, cylinders) read as low-poly facets without custom meshes.
+ // Optional wind sway: displacement grows with height above the ground, so trunks stay
+ // planted while crowns move. Gusts travel across the world, not per object.
+ shader_type spatial;
+ 
+-// Set from the playground (project setting: shader_globals/wind_strength).
+-global uniform float wind_strength;
++#include "res://assets/shaders/wind.gdshaderinc"
+ 
+ uniform vec4 albedo : source_color = vec4(0.5, 0.5, 0.5, 1.0);
+ uniform float roughness : hint_range(0.0, 1.0) = 0.95;
+ uniform vec4 emission : source_color = vec4(0.0, 0.0, 0.0, 1.0);
+ uniform float emission_energy : hint_range(0.0, 16.0) = 0.0;
+ // Darkens surfaces near the ground to visually anchor objects (cheap fake contact shade).
+ uniform float base_darkening : hint_range(0.0, 1.0) = 0.35;
+ uniform float base_height = 1.5;
+ // 0 = rigid. Parts of one object must share the same value or they drift apart.
+ uniform float sway : hint_range(0.0, 2.0) = 0.0;
+ uniform float sway_frequency : hint_range(0.1, 10.0) = 1.0;
+ // Per-object brightness/temperature jitter (seeded by the object's world position), so
+ // repeated instances of one asset don't read as copies. 0 = off.
+ uniform float tint_variation : hint_range(0.0, 0.5) = 0.0;
+ 
+-const vec2 WIND_DIR = vec2(0.8, -0.6);  // keep in sync with playground.gd WIND_DIR
+-
+ varying float world_y;
+ 
+ void vertex() {
+ 	vec3 world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+ 	world_y = world.y;
+ 	if (sway > 0.0) {
+-		float phase = dot(world.xz, WIND_DIR) * 0.12;
+-		float gust = 0.55 + 0.45 * sin(TIME * 0.4 - phase * 0.6);  // slow gust fronts roll across the forest
++		float phase = dot(world.xz, wind_direction) * 0.12;
++		float gust = 0.1 + 0.9 * wind_gust(world.xz);  // patchy gusts travel downwind (avg ~0.55, as before)
+ 		float t = TIME * sway_frequency;
+ 		float wave = sin(t * 1.3 - phase) + 0.3 * sin(t * 3.7 - phase * 2.3);
+ 		float bend = sway * wind_strength * gust * wave * world.y * world.y * 0.006;
+-		world.xz += WIND_DIR * bend;
++		world.xz += wind_direction * bend;
+ 		VERTEX = (inverse(MODEL_MATRIX) * vec4(world, 1.0)).xyz;
+ 	}
+ }
+ 
+ float hash(vec2 p) {
+ 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+ }
+ 
+--- /dev/null	2026-11-08 12:12:53.000000000 +0800
++++ addons/grass_painter/plugin.cfg	2026-11-08 11:47:31.760246900 +0800
+@@ -0,0 +1,7 @@
++[plugin]
++
++name="Grass Painter"
++description="Paints a GrassField's density/height mask in the 3D viewport. Grass masks only."
++author="Environment Forge"
++version="1.0"
++script="plugin.gd"
+--- /dev/null	2026-11-08 12:12:53.000000000 +0800
++++ addons/grass_painter/plugin.gd	2026-11-08 11:49:48.793950500 +0800
+@@ -0,0 +1,301 @@
++@tool
++extends EditorPlugin
++## Grass mask painter: select a GrassField and paint its density / height mask in the 3D
++## viewport. LMB paints, Shift + LMB erases, [ and ] shrink / grow the brush. One stroke is one
++## undo step; the mask is saved to its own .res file at the end of every stroke.
++##
++## Glue only: the painting logic lives in GrassBrush (scripts/environment/grass_brush.gd).
++## Approved exception to the no-plugin rule (Stage 9); it paints grass masks and nothing else.
++
++const CURSOR_POINTS := 48
++const CURSOR_LIFT := 0.05  # metres above the ground, so the line isn't z-fighting
++const RADIUS_MIN := 0.5
++const RADIUS_MAX := 20.0
++const REGROUND_DELAY := 0.3  # seconds a moved field must sit still before its blades re-ground
++
++var _brush := GrassBrush.new()
++var _field: GrassField
++var _stroke_mode := GrassField.PaintMode.DENSITY  # the toolbar mode, restored after a Shift stroke
++
++var _toolbar: HBoxContainer
++var _mode_button: OptionButton
++var _radius_box: SpinBox
++var _strength_box: SpinBox
++var _target_box: SpinBox
++
++var _cursor: MeshInstance3D
++var _cursor_mesh: ImmediateMesh
++var _cursor_material: StandardMaterial3D
++var _cursor_at: Variant = null  # last brush position on the ground, or null
++
++var _last_origin := Vector3.INF
++var _moved_for := -1.0  # seconds since the field last moved; < 0 = not waiting
++
++
++func _enter_tree() -> void:
++	_build_toolbar()
++	add_control_to_container(CONTAINER_SPATIAL_EDITOR_MENU, _toolbar)
++	_toolbar.hide()
++
++
++func _exit_tree() -> void:
++	_end_stroke()
++	_free_cursor()
++	remove_control_from_container(CONTAINER_SPATIAL_EDITOR_MENU, _toolbar)
++	_toolbar.queue_free()
++	_toolbar = null
++	_field = null
++
++
++func _handles(object: Object) -> bool:
++	return object is GrassField
++
++
++func _edit(object: Object) -> void:
++	if object == _field:
++		return
++	_end_stroke()
++	_free_cursor()
++	_field = object as GrassField
++	_last_origin = _field.global_position if _field != null else Vector3.INF
++	_moved_for = -1.0
++
++
++func _make_visible(visible: bool) -> void:
++	if _toolbar != null:
++		_toolbar.visible = visible
++	if not visible:
++		_end_stroke()
++		_free_cursor()
++
++
++# A moved field keeps its old blade heights until rebuilt; once it has stopped moving, re-ground
++# it (rebuild re-raycasts the ground cache because its origin changed).
++func _process(delta: float) -> void:
++	if not _field_ok():
++		return
++	var origin := _field.global_position
++	if not origin.is_equal_approx(_last_origin):
++		_last_origin = origin
++		_moved_for = 0.0
++		_hide_cursor()
++	elif _moved_for >= 0.0:
++		_moved_for += delta
++		if _moved_for >= REGROUND_DELAY and not _brush.is_painting():
++			_moved_for = -1.0
++			_field.mark_dirty()
++
++
++func _forward_3d_gui_input(camera: Camera3D, event: InputEvent) -> int:
++	if not _field_ok():
++		return AFTER_GUI_INPUT_PASS
++
++	var motion := event as InputEventMouseMotion
++	if motion != null:
++		var hit: Variant = _ground_under(camera, motion.position)
++		_show_cursor(hit)
++		if _brush.is_painting():
++			if hit != null:
++				_brush.dab(hit)
++			return AFTER_GUI_INPUT_STOP
++		return AFTER_GUI_INPUT_PASS
++
++	var button := event as InputEventMouseButton
++	if button != null and button.button_index == MOUSE_BUTTON_LEFT:
++		if button.pressed:
++			_end_stroke()  # a release outside the viewport may have been missed
++			if button.alt_pressed or button.ctrl_pressed or button.meta_pressed:
++				return AFTER_GUI_INPUT_PASS  # leave modified clicks to the editor
++			var hit: Variant = _ground_under(camera, button.position)
++			if hit == null:
++				return AFTER_GUI_INPUT_PASS
++			_stroke_mode = _brush.mode
++			if button.shift_pressed:
++				_brush.mode = GrassField.PaintMode.ERASE
++			_brush.begin(_field)
++			_brush.dab(hit)
++			_show_cursor(hit)
++			return AFTER_GUI_INPUT_STOP
++		if _brush.is_painting():
++			_end_stroke()
++			return AFTER_GUI_INPUT_STOP
++		return AFTER_GUI_INPUT_PASS
++
++	var key := event as InputEventKey
++	if key != null and key.pressed and not key.echo:
++		if key.keycode == KEY_BRACKETLEFT or key.keycode == KEY_BRACKETRIGHT:
++			var factor := 0.8 if key.keycode == KEY_BRACKETLEFT else 1.25
++			_radius_box.value = clampf(_brush.radius * factor, RADIUS_MIN, RADIUS_MAX)
++			return AFTER_GUI_INPUT_STOP
++
++	return AFTER_GUI_INPUT_PASS
++
++
++# --- stroke ------------------------------------------------------------------------------
++
++func _end_stroke() -> void:
++	if not _brush.is_painting():
++		return
++	var field := _field
++	var pair := _brush.end()
++	_brush.mode = _stroke_mode
++	if pair.is_empty() or not _field_ok() or pair[0].get_data() == pair[1].get_data():
++		return
++	var saved := _save_mask(field)
++	var undo := get_undo_redo()
++	# The field as context puts the action in its scene's history; ResourceSaver alone would
++	# otherwise ask for the global one.
++	undo.create_action("Paint grass", UndoRedo.MERGE_DISABLE, field)
++	undo.add_do_method(field, "set_mask_data", pair[1])
++	undo.add_undo_method(field, "set_mask_data", pair[0])
++	if saved:  # keep the .res file in step with undo / redo
++		undo.add_do_method(ResourceSaver, "save", field.mask, "", 0)
++		undo.add_undo_method(ResourceSaver, "save", field.mask, "", 0)
++	undo.commit_action(false)  # the stroke is already painted
++
++
++## Writes the mask to its .res file. A mask without a file of its own is saved next to the
++## edited scene as <scene_name>_grass.res (or _grass_2.res, ... if that name is taken).
++func _save_mask(field: GrassField) -> bool:
++	var mask := field.mask
++	var path := mask.resource_path
++	if not path.is_empty() and not path.contains("::"):
++		return ResourceSaver.save(mask) == OK
++	var root := EditorInterface.get_edited_scene_root()
++	var scene_path := root.scene_file_path if root != null else ""
++	if scene_path.is_empty():
++		push_warning("Grass Painter: save the scene first; the grass mask is stored next to it.")
++		return false
++	var base := scene_path.get_basename() + "_grass"
++	path = base + ".res"
++	var n := 2
++	while ResourceLoader.exists(path):
++		path = "%s_%d.res" % [base, n]
++		n += 1
++	if ResourceSaver.save(mask, path) != OK:
++		push_error("Grass Painter: could not save the grass mask to %s" % path)
++		return false
++	mask.take_over_path(path)  # the scene now references the file instead of embedding it
++	EditorInterface.get_resource_filesystem().update_file(path)
++	EditorInterface.mark_scene_as_unsaved()
++	return true
++
++
++# --- brush cursor ------------------------------------------------------------------------
++
++func _ground_under(camera: Camera3D, screen_pos: Vector2) -> Variant:
++	return GrassBrush.ray_to_ground(_field, camera.project_ray_origin(screen_pos),
++			camera.project_ray_normal(screen_pos))
++
++
++## Draws the brush circle at `at` (a ground point), following the ground; hides it on null.
++func _show_cursor(at: Variant) -> void:
++	_cursor_at = at
++	if at == null:
++		_hide_cursor()
++		return
++	if _cursor == null:
++		_cursor_mesh = ImmediateMesh.new()
++		_cursor_material = StandardMaterial3D.new()
++		_cursor_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
++		_cursor_material.no_depth_test = true
++		_cursor_material.albedo_color = Color(1.0, 0.85, 0.2)
++		_cursor = MeshInstance3D.new()
++		_cursor.mesh = _cursor_mesh
++		_cursor.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
++		_cursor.top_level = true  # drawn in world space
++		_field.add_child(_cursor, false, Node.INTERNAL_MODE_BACK)  # no owner: never saved
++	var centre: Vector3 = at
++	_cursor_mesh.clear_surfaces()
++	_cursor_mesh.surface_begin(Mesh.PRIMITIVE_LINE_STRIP, _cursor_material)
++	for i in CURSOR_POINTS + 1:  # the last point closes the loop
++		var angle := TAU * i / CURSOR_POINTS
++		var p := centre + Vector3(cos(angle), 0.0, sin(angle)) * _brush.radius
++		var y := _field.ground_height_at(Vector2(p.x, p.z))
++		_cursor_mesh.surface_add_vertex(Vector3(p.x, (centre.y if is_nan(y) else y) + CURSOR_LIFT, p.z))
++	_cursor_mesh.surface_end()
++	_cursor.global_transform = Transform3D.IDENTITY
++	_cursor.show()
++
++
++func _hide_cursor() -> void:
++	if _cursor != null and is_instance_valid(_cursor):
++		_cursor.hide()
++
++
++func _free_cursor() -> void:
++	if _cursor != null and is_instance_valid(_cursor):
++		_cursor.get_parent().remove_child(_cursor)
++		_cursor.queue_free()
++	_cursor = null
++	_cursor_mesh = null
++	_cursor_at = null
++
++
++func _field_ok() -> bool:
++	return _field != null and is_instance_valid(_field) and _field.is_inside_tree()
++
++
++# --- toolbar -----------------------------------------------------------------------------
++
++func _build_toolbar() -> void:
++	_toolbar = HBoxContainer.new()
++	_toolbar.add_child(VSeparator.new())
++	var title := Label.new()
++	title.text = "Grass"
++	title.tooltip_text = "LMB paints, Shift + LMB erases, [ / ] shrink / grow the brush."
++	title.mouse_filter = Control.MOUSE_FILTER_PASS
++	_toolbar.add_child(title)
++
++	_mode_button = OptionButton.new()
++	_mode_button.add_item("Density", GrassField.PaintMode.DENSITY)
++	_mode_button.add_item("Height", GrassField.PaintMode.HEIGHT)
++	_mode_button.add_item("Erase", GrassField.PaintMode.ERASE)
++	_mode_button.select(_mode_button.get_item_index(_brush.mode))
++	_mode_button.tooltip_text = "What the brush paints. Shift + LMB always erases."
++	_mode_button.item_selected.connect(_on_mode_selected)
++	_toolbar.add_child(_mode_button)
++
++	_radius_box = _add_spin("Radius", RADIUS_MIN, RADIUS_MAX, 0.1, _brush.radius, " m",
++			"Brush radius in metres ([ / ] scale it).", _on_radius_changed)
++	_strength_box = _add_spin("Strength", 0.05, 1.0, 0.05, _brush.strength, "",
++			"How far each dab moves the mask toward the target.", _on_strength_changed)
++	_target_box = _add_spin("Target", 0.0, 1.0, 0.05, _brush.target, "",
++			"Density (Density mode) or height (Height mode) to paint toward.", _on_target_changed)
++
++
++func _on_mode_selected(index: int) -> void:
++	_brush.mode = _mode_button.get_item_id(index) as GrassField.PaintMode
++	_stroke_mode = _brush.mode
++
++
++func _on_radius_changed(value: float) -> void:
++	_brush.radius = value
++	if _cursor_at != null and _field_ok():
++		_show_cursor(_cursor_at)
++
++
++func _on_strength_changed(value: float) -> void:
++	_brush.strength = value
++
++
++func _on_target_changed(value: float) -> void:
++	_brush.target = value
++
++
++func _add_spin(label: String, lo: float, hi: float, step: float, value: float, suffix: String,
++		tooltip: String, on_change: Callable) -> SpinBox:
++	var text := Label.new()
++	text.text = label
++	_toolbar.add_child(text)
++	var box := SpinBox.new()
++	box.min_value = lo
++	box.max_value = hi
++	box.step = step
++	box.value = value
++	box.suffix = suffix
++	box.tooltip_text = tooltip
++	box.custom_minimum_size.x = 80
++	box.value_changed.connect(on_change)
++	_toolbar.add_child(box)
++	return box
+--- /dev/null	2026-11-08 12:12:54.000000000 +0800
++++ tools/make_starter_grass.gd	2026-11-08 11:42:13.316959400 +0800
+@@ -0,0 +1,84 @@
++extends SceneTree
++## Run once to (re)write the starter meadow mask:
++##   godot --headless --path . -s res://tools/make_starter_grass.gd
++## Density is patchy noise, zero on the path and the clearing; height grows with distance from
++## the path. Texels are written directly (R density, G height, byte-scaled).
++
++const OUT := "res://assets/grass/playground_grass.res"
++const FIELD_CENTRE := Vector2(0, 6)
++const FIELD_EXTENT := Vector2(74, 104)
++const TEXEL := 0.5
++const PATH_CLEAR := 1.0  ## metres beyond the path's half-width with no grass
++const PATH_RAMP := 2.0  ## ...then density ramps to full over this much more
++const HEIGHT_NEAR := 0.3
++const HEIGHT_FAR := 0.9
++const HEIGHT_FAR_AT := 15.0
++
++
++func _init() -> void:
++	var scene: Node = load("res://scenes/playground.tscn").instantiate()
++	var lines: Array = []  # [PackedVector2Array centreline, PackedFloat32Array half widths]
++	for node_name in ["Path", "SideTrail"]:
++		var n: Node = scene.get_node(node_name)
++		var xf: Transform3D = Transform3D(n.transform)
++		var pts := PackedVector2Array()
++		var halves := PackedFloat32Array()
++		var samples: PackedVector2Array = n.call("_sample")
++		for i in samples.size():
++			var w := xf * Vector3(samples[i].x, 0.0, samples[i].y)
++			pts.append(Vector2(w.x, w.z))
++			# Same width profile as PathRibbon, plus allowance for the edge noise bulges.
++			var t := float(i) / float(samples.size() - 1)
++			var half: float = float(n.get("width")) * 0.5 * lerpf(1.0, float(n.get("end_width_scale")), smoothstep(0.7, 1.0, t))
++			half *= lerpf(float(n.get("start_width_scale")), 1.0, smoothstep(0.0, 0.25, t))
++			halves.append(half * (1.0 + float(n.get("edge_noise")) * 0.8))
++		lines.append([pts, halves])
++	var clearing: Node3D = scene.get_node("Clearing")
++	var clearing_c := Vector2(clearing.position.x, clearing.position.z)
++	var clearing_r: float = (clearing.get_node("Floor") as MeshInstance3D).mesh.get("top_radius")
++
++	var size := Vector2i(ceili(FIELD_EXTENT.x / TEXEL), ceili(FIELD_EXTENT.y / TEXEL))
++	var corner := FIELD_CENTRE - FIELD_EXTENT * 0.5
++	var noise := FastNoiseLite.new()
++	noise.seed = 9
++	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
++	noise.frequency = 1.0 / 12.0
++	var hnoise := FastNoiseLite.new()
++	hnoise.seed = 19
++	hnoise.frequency = 1.0 / 9.0
++
++	var data := PackedByteArray()
++	data.resize(size.x * size.y * 2)
++	for y in size.y:
++		for x in size.x:
++			var p := corner + (Vector2(x, y) + Vector2(0.5, 0.5)) * TEXEL
++			var d := INF  # distance beyond the nearest path edge
++			for line: Array in lines:
++				d = minf(d, _dist_beyond_edge(p, line[0], line[1]))
++			var patch := lerpf(0.4, 1.0, clampf(noise.get_noise_2d(p.x, p.y) * 0.5 + 0.5, 0.0, 1.0))
++			var density := patch * smoothstep(PATH_CLEAR, PATH_CLEAR + PATH_RAMP, d)
++			if p.distance_to(clearing_c) <= clearing_r + 0.5:
++				density = 0.0
++			var h_t := clampf(maxf(d, 0.0) / HEIGHT_FAR_AT, 0.0, 1.0)
++			var h := lerpf(HEIGHT_NEAR, HEIGHT_FAR, h_t) + hnoise.get_noise_2d(p.x, p.y) * 0.08
++			# G is 0..1 across min_height..max_height (0.25..0.9); store the target metres.
++			var g := clampf((h - 0.25) / (0.9 - 0.25), 0.0, 1.0)
++			var i := (y * size.x + x) * 2
++			data[i] = roundi(clampf(density, 0.0, 1.0) * 255.0)
++			data[i + 1] = roundi(g * 255.0)
++	var image := Image.create_from_data(size.x, size.y, false, Image.FORMAT_RG8, data)
++	var err := ResourceSaver.save(image, OUT)
++	print("starter grass mask %s: %s" % [size, "saved" if err == OK else "error %d" % err])
++	scene.free()
++	quit(0 if err == OK else 1)
++
++
++## Distance from p to the path's edge (negative inside), by nearest centreline segment.
++static func _dist_beyond_edge(p: Vector2, pts: PackedVector2Array, halves: PackedFloat32Array) -> float:
++	var best := INF
++	for i in pts.size() - 1:
++		var a := pts[i]
++		var ab := pts[i + 1] - a
++		var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
++		best = minf(best, p.distance_to(a + ab * t) - lerpf(halves[i], halves[i + 1], t))
++	return best
+--- /dev/null	2026-11-08 12:12:54.000000000 +0800
++++ assets/shaders/grass.gdshader	2026-11-08 11:38:57.220807500 +0800
+@@ -0,0 +1,73 @@
++// Grass blades for GrassField (scripts/environment/grass_field.gd), drawn as MultiMesh chunks.
++// Faceted like flat_color: normals are rebuilt per face from screen derivatives, and the base is
++// darkened as a cheap contact shade. Colour runs from base_color at the root (UV.y = 0) to
++// tip_color at the tip (UV.y = 1).
++// INSTANCE_CUSTOM = (tint 0..1, phase 0..1, fade 0..1, unused): tint jitters brightness, phase
++// desyncs the flutter, fade is the blade's rank for the distance thinning.
++// Wind: blades lean along wind_direction, more inside gusts (wind_gust, shared with the trees)
++// and more toward the tip; the root stays planted. Gust patches also brighten the tips.
++shader_type spatial;
++render_mode cull_disabled, skip_vertex_transform;
++
++#include "res://assets/shaders/wind.gdshaderinc"
++
++uniform vec4 base_color : source_color = vec4(0.12, 0.14, 0.10, 1.0);
++uniform vec4 tip_color : source_color = vec4(0.30, 0.31, 0.19, 1.0);
++uniform float roughness : hint_range(0.0, 1.0) = 0.95;
++// Darkens the lower part of each blade (the same contact shade as flat_color, measured along
++// the blade so it holds on the mounds too).
++uniform float base_darkening : hint_range(0.0, 1.0) = 0.35;
++uniform float base_height : hint_range(0.01, 1.0) = 0.4;
++// Per-blade brightness jitter from INSTANCE_CUSTOM.r. 0 = off.
++uniform float tint_variation : hint_range(0.0, 0.5) = 0.12;
++
++// Tip offset in blade heights at wind_strength 1 inside a full gust.
++uniform float bend : hint_range(0.0, 2.0) = 0.9;
++// Sideways shimmer of the tips, in blade heights per unit of wind_strength.
++uniform float flutter : hint_range(0.0, 0.5) = 0.08;
++// Tip brightening at full gust.
++uniform float highlight : hint_range(0.0, 1.0) = 0.18;
++// Camera distances (m) where blades start thinning out and are all gone.
++uniform float fade_start = 25.0;
++uniform float fade_end = 45.0;
++
++// How much of the keep fraction a blade shrinks over before it vanishes (no popping line).
++const float FADE_BAND = 0.12;
++
++varying float tint;
++varying float gust_lit;
++
++void vertex() {
++	tint = INSTANCE_CUSTOM.r;
++	vec3 root = MODEL_MATRIX[3].xyz;
++	vec3 world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
++	float height = length(MODEL_MATRIX[1].xyz);
++
++	// Distance fade: blades are ranked by fade_rand; the ones past the keep fraction shrink to
++	// nothing around their root, so the thinning has no hard edge.
++	float keep = 1.0 - smoothstep(fade_start, fade_end, distance(root, CAMERA_POSITION_WORLD));
++	float size = clamp((keep * (1.0 + FADE_BAND) - INSTANCE_CUSTOM.b) / FADE_BAND, 0.0, 1.0);
++	world = root + (world - root) * size;
++
++	// Lean along the wind, harder in gusts, zero at the root; flutter across the wind.
++	float gust = wind_gust(root.xz);
++	float tip = UV.y;
++	float lean = wind_strength * (0.35 + 0.65 * gust) * bend * tip * tip * height;
++	vec2 across = vec2(-wind_direction.y, wind_direction.x);
++	float shimmer = sin(TIME * 7.0 + INSTANCE_CUSTOM.g * 6.283) * flutter * wind_strength * tip * height;
++	world.xz += wind_direction * lean * size + across * shimmer * size;
++	gust_lit = gust * min(wind_strength, 1.0);
++
++	VERTEX = (VIEW_MATRIX * vec4(world, 1.0)).xyz;
++	NORMAL = normalize((MODELVIEW_NORMAL_MATRIX * NORMAL));
++}
++
++void fragment() {
++	NORMAL = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
++	float ground = 1.0 - base_darkening * (1.0 - smoothstep(0.0, base_height, UV.y));
++	vec3 color = mix(base_color.rgb, tip_color.rgb, UV.y);
++	color *= 1.0 + tint_variation * (tint * 2.0 - 1.0);
++	color *= 1.0 + highlight * gust_lit * UV.y;
++	ALBEDO = color * ground;
++	ROUGHNESS = roughness;
++}
+--- /dev/null	2026-11-08 12:12:54.000000000 +0800
++++ assets/shaders/wind.gdshaderinc	2026-11-08 11:23:33.292979600 +0800
+@@ -0,0 +1,28 @@
++// Shared wind: the three globals published by scripts/environment/wind.gd, and the gust field
++// every wind-driven shader samples, so trees and grass lean in the same patches.
++global uniform float wind_strength;
++global uniform vec2 wind_direction;
++global uniform vec2 wind_offset;
++
++float wind_hash(vec2 p) {
++	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
++}
++
++float wind_value_noise(vec2 p) {
++	vec2 i = floor(p);
++	vec2 f = fract(p);
++	f = f * f * (3.0 - 2.0 * f);
++	return mix(mix(wind_hash(i), wind_hash(i + vec2(1.0, 0.0)), f.x),
++			mix(wind_hash(i + vec2(0.0, 1.0)), wind_hash(i + vec2(1.0, 1.0)), f.x), f.y);
++}
++
++// Gust strength 0..1 at a world position: irregular patches (~20 m along the wind, ~40 m across
++// it, so fronts run across the wind) that travel downwind as wind_offset grows.
++float wind_gust(vec2 world_xz) {
++	vec2 p = world_xz - wind_offset;
++	vec2 along = wind_direction;
++	vec2 across = vec2(-along.y, along.x);
++	vec2 q = vec2(dot(p, along) / 20.0, dot(p, across) / 40.0);
++	float g = wind_value_noise(q) * 0.65 + wind_value_noise(q * 2.3 + vec2(7.3, 1.7)) * 0.35;
++	return clamp((g - 0.2) / 0.6, 0.0, 1.0);
++}

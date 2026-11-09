@@ -1,0 +1,502 @@
+# Task 1 review package (diff baseline -> current)
+diff -ruN -U10 -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/wind.gd scripts/environment/wind.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/environment/wind.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/environment/wind.gd	2026-11-08 11:24:06.870500800 +0800
+@@ -0,0 +1,50 @@
++@tool
++class_name Wind
++extends Node
++## The scene's wind: a strength, a compass direction and a gust field that travels with it.
++## Publishes three global shader uniforms (wind_strength, wind_direction, wind_offset) that
++## wind.gdshaderinc reads. The offset is integrated here, never derived from TIME * speed, so
++## changing strength or direction can't make the gust pattern jump.
++
++## Metres per second the gust pattern travels at strength 1.0.
++const GUST_SPEED := 4.0
++
++## 0 = calm, 1 = the Stage 8 look, 2 = storm.
++@export_range(0, 2) var strength := 0.6:
++	set(value):
++		strength = value
++		_publish("wind_strength", value)
++## Compass angle the wind blows toward: 0 = toward -Z, 90 = toward +X, clockwise from above.
++@export_range(0, 360) var direction_degrees := 53.13:
++	set(value):
++		direction_degrees = value
++		_publish("wind_direction", vector())
++## How far the gust pattern has travelled, in metres.
++var offset := Vector2.ZERO
++
++
++func _ready() -> void:
++	_publish("wind_strength", strength)
++	_publish("wind_direction", vector())
++	_publish("wind_offset", offset)
++
++
++func _process(delta: float) -> void:
++	offset += vector() * strength * GUST_SPEED * delta
++	_publish("wind_offset", offset)
++
++
++## Unit vector on the ground plane (x, z) the wind blows toward.
++static func vector_for(degrees: float) -> Vector2:
++	var rad := deg_to_rad(degrees)
++	return Vector2(sin(rad), -cos(rad))
++
++
++func vector() -> Vector2:
++	return vector_for(direction_degrees)
++
++
++## A no-op when the global doesn't exist (a project without the shader_globals entries).
++func _publish(global_name: String, value: Variant) -> void:
++	if ProjectSettings.has_setting("shader_globals/" + global_name):
++		RenderingServer.global_shader_parameter_set(global_name, value)
+diff -ruN -U10 -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/playground.gd scripts/playground.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/playground.gd	2026-11-08 11:21:39.282057900 +0800
++++ scripts/playground.gd	2026-11-08 11:23:55.959885100 +0800
+@@ -15,52 +15,49 @@
+ 	"Normal": Viewport.DEBUG_DRAW_DISABLED,
+ 	"Unshaded": Viewport.DEBUG_DRAW_UNSHADED,
+ 	"Lighting": Viewport.DEBUG_DRAW_LIGHTING,
+ 	"Overdraw": Viewport.DEBUG_DRAW_OVERDRAW,
+ 	"Wireframe": Viewport.DEBUG_DRAW_WIREFRAME,
+ }
+ const GAMEPLAY := 0
+ const SCOUT := 1
+ const GAMEPLAY_INTENT := "Follow camera. Use Shift X/Y to put the player on a third instead of dead centre."
+ const SCOUT_INTENT := "Scout: fly around (WASD, RMB look, Q/E down/up). Press B to bookmark the shot."
+-## Keep in sync with WIND_DIR in flat_color.gdshader.
+-const WIND_DIR := Vector2(0.8, -0.6)
+ const MIST_DRIFT := 0.05  # noise-space units per second at wind 1.0
+ const MOTE_DRIFT := 0.3  # m/s² of sideways push on motes at wind 1.0
+ ## Sky halo brightness relative to the in-fog sun scatter, so one slider drives both.
+ const SKY_GLOW_PER_SCATTER := 3.2
+ 
+ ## Applied in this order: the view must switch before FOV is set on it.
+ const PARAM_ORDER := [
+ 	"view", "cam_fov", "cam_height", "cam_distance", "cam_pitch", "cam_shift_x", "cam_shift_y",
+ 	"guides_grid", "guides_center", "guides_aspect",
+ 	"value_mode", "value_squint", "value_split",
+ 	"light_energy", "light_elevation", "light_azimuth", "sun_color", "ambient_energy", "shadows",
+ 	"sky_color", "zenith_color", "sun_glow", "fog_enabled", "fog_density", "fog_height_density",
+ 	"light_shafts", "shaft_density", "mist",
+-	"wind", "motes",
++	"wind", "wind_direction", "motes",
+ 	"supernatural", "spirit_amount", "hole_glow",
+ 	"landmark_visible", "props_visible",
+ 	"forest_mode", "scatter_seed", "tree_density", "tree_spacing", "tree_clumping", "rock_density", "show_zones",
+ ]
+ 
+ ## [0] gameplay, [1] scout, then authored viewpoints, then runtime bookmarks.
+ var _cameras: Array[Camera3D] = []
+ var _default_fovs: Array[float] = []
+ var _view := GAMEPLAY
+ var _last_fixed_view := GAMEPLAY  # where F returns to after scouting
+ var _bookmark_count := 0
+ var _default_state: Dictionary
+ var _player_start: Transform3D
+ var _layout_env: Environment  # fog-free copy for viewpoints with ignore_fog
+ var _hud: Label
+-var _wind := 0.0
+ var _mist_offset := Vector3.ZERO
+ var _forest_mode := "Manual"
+ var _show_zones := false
+ ## Where user presets are saved; tests point this at user://.
+ var preset_path := Presets.USER_PATH
+ var _typing := false  # a panel text field has focus: no hotkeys, no walking
+ var compare: Compare
+ var probe: ValueProbe
+ var perf_hud: PerfHud
+ var light_gizmos: LightGizmos
+@@ -68,20 +65,21 @@
+ var _overlay_depth := 0  # nested hide_overlays() calls; only the outermost pair acts
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var scout_cam: ScoutCamera = $ScoutCamera
+ @onready var sun: DirectionalLight3D = $Sun
+ @onready var env: Environment = $WorldEnvironment.environment
+ @onready var landmark: Node3D = $Landmark
+ @onready var props: Node3D = $Props
+ @onready var mist: FogVolume = $Mist
++@onready var wind: Wind = $Wind
+ @onready var motes: GPUParticles3D = $Player/Motes
+ @onready var spirit_stream: SpiritStream = $SpiritStream
+ @onready var hole_glow: Breathe = $Landmark/HoleGlow
+ @onready var hole_light: SpotLight3D = $Landmark/HoleLight
+ @onready var sky_material: ShaderMaterial = env.sky.sky_material
+ ## The hand-placed forest. Detached from the tree (not just hidden) in procedural mode, so its
+ ## colliders go away too.
+ @onready var manual_forest: Node3D = $Forest
+ @onready var tree_scatter: Scatter = $Scatter/Trees
+ @onready var rock_scatter: Scatter = $Scatter/Rocks
+@@ -97,22 +95,21 @@
+ 	for c in $Viewpoints.get_children():
+ 		if c is Camera3D:
+ 			_register_viewpoint(c)
+ 	for c in _cameras:
+ 		_default_fovs.append(c.fov)
+ 	_player_start = player.global_transform
+ 	# Unset shader uniforms read back as null, so give the value view explicit defaults.
+ 	_value_material().set_shader_parameter("mode", 0)
+ 	_value_material().set_shader_parameter("squint", 0.0)
+ 	_value_material().set_shader_parameter("split", 0.62)
+-	_wind = ProjectSettings.get_setting("shader_globals/wind_strength", {"value": 0.6})["value"]
+-	set_param("wind", _wind)
++	_update_mote_gravity()
+ 	_build_hud()
+ 	panel.add_to_group("overlay")
+ 	_hud.add_to_group("overlay")
+ 	compare = Compare.new()
+ 	compare.name = "Compare"
+ 	compare.pg = self
+ 	add_child(compare)
+ 	compare.changed.connect(_on_compare_changed)
+ 	compare.attach_view($UI, panel)
+ 	probe = ValueProbe.new()
+@@ -129,21 +126,22 @@
+ 	panel.setup(self)
+ 	follow_cam.user_adjusted.connect(panel.sync)
+ 	tree_scatter.generated.connect(_on_scatter_generated)
+ 	rock_scatter.generated.connect(_on_scatter_generated)
+ 	_run_command_line.call_deferred()
+ 
+ 
+ func _process(delta: float) -> void:
+ 	# Advance the mist with the wind; integrating (instead of TIME * speed in the shader)
+ 	# keeps it from jumping when the wind slider moves.
+-	_mist_offset -= Vector3(WIND_DIR.x, 0.0, WIND_DIR.y) * _wind * MIST_DRIFT * delta
++	var drift := wind.vector() * wind.strength * MIST_DRIFT * delta
++	_mist_offset -= Vector3(drift.x, 0.0, drift.y)
+ 	mist.material.set_shader_parameter("offset", _mist_offset)
+ 
+ 
+ func _exit_tree() -> void:
+ 	if manual_forest and not manual_forest.is_inside_tree():
+ 		manual_forest.free()  # detached in procedural mode; free it ourselves
+ 
+ 
+ func _unhandled_input(event: InputEvent) -> void:
+ 	if not (event is InputEventKey) or event.echo:
+@@ -210,21 +208,22 @@
+ 		"light_azimuth": return sun.rotation_degrees.y
+ 		"sun_color": return sun.light_color
+ 		"ambient_energy": return env.ambient_light_energy
+ 		"shadows": return sun.shadow_enabled
+ 		"sky_color": return env.fog_light_color
+ 		"zenith_color": return env.ambient_light_color
+ 		"sun_glow": return env.fog_sun_scatter
+ 		"light_shafts": return env.volumetric_fog_enabled
+ 		"shaft_density": return env.volumetric_fog_density
+ 		"mist": return mist.material.get_shader_parameter("density")
+-		"wind": return _wind
++		"wind": return wind.strength
++		"wind_direction": return wind.direction_degrees
+ 		"motes": return motes.emitting
+ 		"supernatural": return spirit_stream.visible
+ 		"spirit_amount": return spirit_stream.amount_ratio
+ 		"hole_glow": return hole_glow.intensity
+ 		"fog_enabled": return env.fog_enabled
+ 		"fog_density": return env.fog_density
+ 		"fog_height_density": return env.fog_height_density
+ 		"landmark_visible": return landmark.visible
+ 		"props_visible": return props.visible
+ 		"forest_mode": return _forest_mode
+@@ -284,24 +283,25 @@
+ 			sky_material.set_shader_parameter("zenith_color", value)
+ 			env.ambient_light_color = value
+ 			_sync_layout_env()
+ 		"sun_glow":
+ 			env.fog_sun_scatter = value
+ 			sky_material.set_shader_parameter("glow_energy", value * SKY_GLOW_PER_SCATTER)
+ 		"light_shafts": env.volumetric_fog_enabled = value
+ 		"shaft_density": env.volumetric_fog_density = value
+ 		"mist": mist.material.set_shader_parameter("density", value)
+ 		"wind":
+-			_wind = value
+-			RenderingServer.global_shader_parameter_set("wind_strength", value)
+-			var process: ParticleProcessMaterial = motes.process_material
+-			process.gravity = Vector3(WIND_DIR.x * value * MOTE_DRIFT, -0.03, WIND_DIR.y * value * MOTE_DRIFT)
++			wind.strength = value
++			_update_mote_gravity()
++		"wind_direction":
++			wind.direction_degrees = value
++			_update_mote_gravity()
+ 		"motes":
+ 			motes.emitting = value
+ 			motes.visible = value
+ 		"supernatural":
+ 			# Off means the plain Stage 6 world: the hole shows sky again.
+ 			spirit_stream.emitting = value
+ 			spirit_stream.visible = value
+ 			hole_glow.visible = value
+ 			hole_light.visible = value
+ 		"spirit_amount": spirit_stream.amount_ratio = value
+@@ -492,20 +492,26 @@
+ 	if index != SCOUT:
+ 		_last_fixed_view = index
+ 	_view = index
+ 	_cameras[index].make_current()
+ 	player.input_enabled = index != SCOUT and not _typing
+ 	if index == GAMEPLAY:
+ 		follow_cam.snap()
+ 	_update_hud()
+ 
+ 
++func _update_mote_gravity() -> void:
++	var push := wind.vector() * wind.strength * MOTE_DRIFT
++	var process: ParticleProcessMaterial = motes.process_material
++	process.gravity = Vector3(push.x, -0.03, push.y)
++
++
+ func _sync_layout_env() -> void:
+ 	if _layout_env == null:
+ 		_layout_env = env.duplicate()  # shares the sky resource, so sky colours follow
+ 		_layout_env.fog_enabled = false
+ 		_layout_env.volumetric_fog_enabled = false
+ 	# Plan view: readability over mood, so fill the shadows with the (lighter) horizon colour.
+ 	_layout_env.ambient_light_color = env.fog_light_color
+ 	_layout_env.ambient_light_energy = maxf(env.ambient_light_energy, 1.0)
+ 
+ 
+diff -ruN -U10 -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/ui/dev_panel.gd scripts/ui/dev_panel.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scripts/ui/dev_panel.gd	2026-11-08 11:21:39.260546900 +0800
++++ scripts/ui/dev_panel.gd	2026-11-08 11:23:51.107855700 +0800
+@@ -64,22 +64,23 @@
+ 	_check("fog_enabled", "Fog")
+ 	_slider("fog_density", "Density", 0, 0.12, 0.001)
+ 	_slider("fog_height_density", "Ground fog", 0, 1, 0.01)
+ 	_check("light_shafts", "Light shafts (volumetric fog)")
+ 	_slider("shaft_density", "Shaft density", 0, 0.08, 0.001)
+ 	_slider("mist", "Drifting mist", 0, 2, 0.01)
+ 	_note("Light shafts and mist are volumetric: mist only shows while Light shafts is on.")
+ 
+ 	_section("Motion")
+ 	_slider("wind", "Wind", 0, 2, 0.01)
++	_slider("wind_direction", "Wind direction", 0, 360, 1)
+ 	_check("motes", "Floating motes")
+-	_note("Wind drives tree sway, cloth flutter, mist drift and motes. Fire and lantern always flicker.")
++	_note("Wind drives grass, tree sway, cloth flutter, mist drift and motes. Direction is where it blows toward: 0 = into the screen from Gameplay's start, 90 = right. Fire and lantern always flicker.")
+ 
+ 	_section("Supernatural")
+ 	_check("supernatural", "Monolith awake (glow, shaft, spirits)")
+ 	_slider("spirit_amount", "Spirits", 0, 1, 0.01)
+ 	_slider("hole_glow", "Hole glow", 0, 2, 0.01)
+ 	_note("Spirits flow from the hole to the ember. The cold shaft from the hole only shows while Light shafts is on.")
+ 
+ 	_section("Environment")
+ 	_check("landmark_visible", "Landmark")
+ 	_check("props_visible", "Story props (camp, posts, cairns, stumps, log)")
+diff -ruN -U10 -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scenes/playground.tscn scenes/playground.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/scenes/playground.tscn	2026-11-08 11:21:39.294263500 +0800
++++ scenes/playground.tscn	2026-11-08 11:23:51.106845900 +0800
+@@ -1,13 +1,14 @@
+ [gd_scene format=3]
+ 
+ [ext_resource type="Script" path="res://scripts/playground.gd" id="1"]
++[ext_resource type="Script" path="res://scripts/environment/wind.gd" id="wind_script"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/tree_dead.tscn" id="3"]
+ [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="6"]
+ [ext_resource type="Material" path="res://assets/materials/ground.tres" id="7"]
+ [ext_resource type="Script" path="res://scripts/environment/path_ribbon.gd" id="8"]
+ [ext_resource type="Material" path="res://assets/materials/path.tres" id="9"]
+ [ext_resource type="Material" path="res://assets/materials/clearing.tres" id="10"]
+ [ext_resource type="Material" path="res://assets/materials/rock.tres" id="11"]
+ [ext_resource type="Material" path="res://assets/materials/ember.tres" id="12"]
+ [ext_resource type="Material" path="res://assets/materials/monolith.tres" id="13"]
+ [ext_resource type="Material" path="res://assets/materials/deadwood.tres" id="14"]
+@@ -1260,20 +1261,24 @@
+ [node name="Ridge10" type="MeshInstance3D" parent="Background"]
+ mesh = SubResource("SphereMesh_14")
+ material_override = ExtResource("16")
+ transform = Transform3D(27.996, 0, 0.7566, 0, 16, 0, -0.4708, 0, 44.9936, 82, 0, 35)
+ 
+ [node name="Ridge11" type="MeshInstance3D" parent="Background"]
+ mesh = SubResource("SphereMesh_14")
+ material_override = ExtResource("16")
+ transform = Transform3D(67.8512, 0, 19.7096, 0, 22, 0, -59.1288, 0, 22.6171, 0, 0, 115)
+ 
++[node name="Wind" type="Node" parent="."]
++script = ExtResource("wind_script")
++strength = 0.6
++
+ [node name="Mist" type="FogVolume" parent="."]
+ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -5)
+ size = Vector3(84, 4, 124)
+ material = SubResource("mist_material")
+ 
+ [node name="Bounds" type="StaticBody3D" parent="."]
+ 
+ [node name="North" type="CollisionShape3D" parent="Bounds"]
+ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, -64)
+ shape = SubResource("BoxShape3D_15")
+diff -ruN -U10 -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/assets/materials/flat_color.gdshader assets/materials/flat_color.gdshader
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/assets/materials/flat_color.gdshader	2026-11-08 11:21:39.303356700 +0800
++++ assets/materials/flat_color.gdshader	2026-11-08 11:23:51.102353100 +0800
+@@ -1,48 +1,45 @@
+ // Faceted, single-colour stylized surface.
+ // Normals are rebuilt per-face from screen derivatives, so smooth primitives
+ // (spheres, cylinders) read as low-poly facets without custom meshes.
+ // Optional wind sway: displacement grows with height above the ground, so trunks stay
+ // planted while crowns move. Gusts travel across the world, not per object.
+ shader_type spatial;
+ 
+-// Set from the playground (project setting: shader_globals/wind_strength).
+-global uniform float wind_strength;
++#include "res://assets/shaders/wind.gdshaderinc"
+ 
+ uniform vec4 albedo : source_color = vec4(0.5, 0.5, 0.5, 1.0);
+ uniform float roughness : hint_range(0.0, 1.0) = 0.95;
+ uniform vec4 emission : source_color = vec4(0.0, 0.0, 0.0, 1.0);
+ uniform float emission_energy : hint_range(0.0, 16.0) = 0.0;
+ // Darkens surfaces near the ground to visually anchor objects (cheap fake contact shade).
+ uniform float base_darkening : hint_range(0.0, 1.0) = 0.35;
+ uniform float base_height = 1.5;
+ // 0 = rigid. Parts of one object must share the same value or they drift apart.
+ uniform float sway : hint_range(0.0, 2.0) = 0.0;
+ uniform float sway_frequency : hint_range(0.1, 10.0) = 1.0;
+ // Per-object brightness/temperature jitter (seeded by the object's world position), so
+ // repeated instances of one asset don't read as copies. 0 = off.
+ uniform float tint_variation : hint_range(0.0, 0.5) = 0.0;
+ 
+-const vec2 WIND_DIR = vec2(0.8, -0.6);  // keep in sync with playground.gd WIND_DIR
+-
+ varying float world_y;
+ 
+ void vertex() {
+ 	vec3 world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+ 	world_y = world.y;
+ 	if (sway > 0.0) {
+-		float phase = dot(world.xz, WIND_DIR) * 0.12;
+-		float gust = 0.55 + 0.45 * sin(TIME * 0.4 - phase * 0.6);  // slow gust fronts roll across the forest
++		float phase = dot(world.xz, wind_direction) * 0.12;
++		float gust = 0.1 + 0.9 * wind_gust(world.xz);  // patchy gusts travel downwind (avg ~0.55, as before)
+ 		float t = TIME * sway_frequency;
+ 		float wave = sin(t * 1.3 - phase) + 0.3 * sin(t * 3.7 - phase * 2.3);
+ 		float bend = sway * wind_strength * gust * wave * world.y * world.y * 0.006;
+-		world.xz += WIND_DIR * bend;
++		world.xz += wind_direction * bend;
+ 		VERTEX = (inverse(MODEL_MATRIX) * vec4(world, 1.0)).xyz;
+ 	}
+ }
+ 
+ float hash(vec2 p) {
+ 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+ }
+ 
+ void fragment() {
+ 	NORMAL = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
+diff -ruN -U10 -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/assets/shaders/wind.gdshaderinc assets/shaders/wind.gdshaderinc
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/assets/shaders/wind.gdshaderinc	1970-01-01 08:00:00.000000000 +0800
++++ assets/shaders/wind.gdshaderinc	2026-11-08 11:23:33.292979600 +0800
+@@ -0,0 +1,28 @@
++// Shared wind: the three globals published by scripts/environment/wind.gd, and the gust field
++// every wind-driven shader samples, so trees and grass lean in the same patches.
++global uniform float wind_strength;
++global uniform vec2 wind_direction;
++global uniform vec2 wind_offset;
++
++float wind_hash(vec2 p) {
++	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
++}
++
++float wind_value_noise(vec2 p) {
++	vec2 i = floor(p);
++	vec2 f = fract(p);
++	f = f * f * (3.0 - 2.0 * f);
++	return mix(mix(wind_hash(i), wind_hash(i + vec2(1.0, 0.0)), f.x),
++			mix(wind_hash(i + vec2(0.0, 1.0)), wind_hash(i + vec2(1.0, 1.0)), f.x), f.y);
++}
++
++// Gust strength 0..1 at a world position: irregular patches (~20 m along the wind, ~40 m across
++// it, so fronts run across the wind) that travel downwind as wind_offset grows.
++float wind_gust(vec2 world_xz) {
++	vec2 p = world_xz - wind_offset;
++	vec2 along = wind_direction;
++	vec2 across = vec2(-along.y, along.x);
++	vec2 q = vec2(dot(p, along) / 20.0, dot(p, across) / 40.0);
++	float g = wind_value_noise(q) * 0.65 + wind_value_noise(q * 2.3 + vec2(7.3, 1.7)) * 0.35;
++	return clamp((g - 0.2) / 0.6, 0.0, 1.0);
++}
+diff -ruN -U10 -x '*.uid' -x '*.import' C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_wind.gd tests/test_wind.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/tests/test_wind.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_wind.gd	2026-11-08 11:24:14.746597200 +0800
+@@ -0,0 +1,55 @@
++extends "res://tests/case.gd"
++## Wind has a direction (a compass angle) and a shared gust field that scrolls with it.
++
++
++func test_compass_convention(_pg) -> void:
++	check(Wind.vector_for(0.0).is_equal_approx(Vector2(0, -1)), "0° blows toward -Z")
++	check(Wind.vector_for(90.0).is_equal_approx(Vector2(1, 0)), "90° blows toward +X")
++	check(Wind.vector_for(53.13).distance_to(Vector2(0.8, -0.6)) < 0.001, "default = old WIND_DIR")
++
++
++func test_direction_param_is_state(pg) -> void:
++	var i: int = pg.PARAM_ORDER.find("wind_direction")
++	check_eq(i, pg.PARAM_ORDER.find("wind") + 1, "wind_direction right after wind")
++	check_near(pg.get_param("wind_direction"), 53.13, 0.01, "default direction")
++	pg.set_param("wind_direction", 90.0)
++	# (RenderingServer.global_shader_parameter_get is editor-only and errors in a running game.)
++	check(pg.wind.vector().is_equal_approx(Vector2(1, 0)), "Wind node follows the param")
++	pg.reset_scene()
++	check_near(pg.get_param("wind_direction"), 53.13, 0.01, "reset restores direction")
++
++
++func test_old_preset_keeps_default_direction(pg) -> void:
++	pg.set_param("wind_direction", 200.0)
++	pg.apply_preset("Wide Reveal")  # has no wind_direction key
++	check_near(pg.get_param("wind_direction"), 53.13, 0.01, "missing key falls back to default")
++
++
++func test_motes_and_mist_follow_direction(pg) -> void:
++	pg.set_param("wind", 1.0)
++	pg.set_param("wind_direction", 90.0)
++	var gravity: Vector3 = pg.motes.process_material.gravity
++	check_near(gravity.x, pg.MOTE_DRIFT, 0.001, "motes pushed toward +X")
++	check_near(gravity.z, 0.0, 0.001, "no Z push at 90°")
++	var before: Vector3 = pg.mist.material.get_shader_parameter("offset")
++	await frames(10)
++	var after: Vector3 = pg.mist.material.get_shader_parameter("offset")
++	check(after.x < before.x, "mist noise scrolls with the wind (offset decreases along +X)")
++	check_near(after.z, before.z, 0.0001, "mist doesn't drift in Z at 90°")
++
++
++func test_gust_offset_has_no_jump(pg) -> void:
++	pg.set_param("wind", 0.5)
++	await frames(2)
++	var before: Vector2 = pg.wind.offset
++	pg.set_param("wind", 2.0)
++	pg.set_param("wind_direction", pg.get_param("wind_direction") + 180.0)
++	await frames(1)
++	check(pg.wind.offset.distance_to(before) < 1.0, "offset keeps integrating; no jump")
++
++
++func test_no_hardcoded_wind_dir(pg) -> void:
++	check(not pg.get_script().get_script_constant_map().has("WIND_DIR"), "WIND_DIR constant removed")
++	var src := FileAccess.get_file_as_string("res://assets/materials/flat_color.gdshader")
++	check(not src.contains("WIND_DIR"), "flat_color uses wind_direction")
++	check(src.contains("wind.gdshaderinc"), "flat_color shares the gust include")
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/baseline/project.godot	2026-11-08 11:21:39.669043800 +0800
++++ project.godot	2026-11-08 11:23:33.212589900 +0800
+@@ -67,10 +67,18 @@
+ [rendering]
+ 
+ anti_aliasing/quality/msaa_3d=2
+ 
+ [shader_globals]
+ 
+ wind_strength={
+ "type": "float",
+ "value": 0.6
+ }
++wind_direction={
++"type": "vec2",
++"value": Vector2(0.8, -0.6)
++}
++wind_offset={
++"type": "vec2",
++"value": Vector2(0, 0)
++}

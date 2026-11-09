@@ -1,0 +1,9 @@
+[gd_resource type="ShaderMaterial" load_steps=2 format=3]
+
+[ext_resource type="Shader" path="res://assets/materials/flat_color.gdshader" id="1"]
+
+[resource]
+shader = ExtResource("1")
+shader_parameter/albedo = Color(0.40, 0.50, 0.64, 1)
+shader_parameter/sway = 0.5
+shader_parameter/sway_frequency = 5.0

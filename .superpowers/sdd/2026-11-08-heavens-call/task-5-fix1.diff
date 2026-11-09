@@ -1,0 +1,707 @@
+# HC Task 5 fix round 1 (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/environment/kit_asset.gd scripts/environment/kit_asset.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scripts/environment/kit_asset.gd	2026-11-08 16:57:15.301206800 +0800
++++ scripts/environment/kit_asset.gd	2026-11-08 16:58:06.006239700 +0800
+@@ -3,44 +3,62 @@
+ ## Root of a kit asset scene (scenes/environment/kit/). Replaces every imported material
+ ## with the palette material of the same name (res://assets/materials/<name>.tres), so
+ ## Blender only has to name materials correctly; colour and shading live in Godot.
+ 
+ const PALETTE_DIR := "res://assets/materials/"
+ ## Walkable ground is on layer 1 (world) + layer 2 (ground); grass rays against layer 2 only.
+ const GROUND_LAYERS := 3
+ 
+ ## Adds trimesh collision on the ground layers (for terrain pieces such as mounds).
+ @export var collision := false
++## Sway and contact shade measured from this instance's origin rather than world height (the
++## flat_color instance uniform of the same name). Set it on kit pieces placed high above y = 0.
++@export var height_from_origin := false:
++	set(value):
++		height_from_origin = value
++		if is_inside_tree():
++			_apply_height_from_origin()
+ 
+ 
+ func _ready() -> void:
+ 	_apply_palette(self)
++	_apply_height_from_origin()
+ 	if collision:
+ 		_build_collision()
+ 
+ 
+ func _apply_palette(node: Node) -> void:
+ 	var instance := node as MeshInstance3D
+ 	if instance and instance.mesh:
+ 		for i in instance.mesh.get_surface_count():
+ 			var source: Material = instance.mesh.surface_get_material(i)
+ 			if source == null:
+ 				continue
+ 			var path := PALETTE_DIR + source.resource_name + ".tres"
+ 			if ResourceLoader.exists(path):
+ 				instance.set_surface_override_material(i, load(path))
+ 			else:
+ 				push_warning("%s: no palette material '%s'" % [owner_name(), source.resource_name])
+ 	for child in node.get_children():
+ 		_apply_palette(child)
+ 
+ 
++
++## Pushes height_from_origin into every geometry instance under this asset. Only set when on, so
++## instances that never use it carry no per-instance parameter at all.
++func _apply_height_from_origin() -> void:
++	for node in find_children("*", "GeometryInstance3D", true, false):
++		var geometry := node as GeometryInstance3D
++		if height_from_origin or geometry.get_instance_shader_parameter("height_from_origin") != null:
++			geometry.set_instance_shader_parameter("height_from_origin", height_from_origin)
++
++
+ ## One static body ("Collision", no owner so it is never saved) with a trimesh per mesh.
+ func _build_collision() -> void:
+ 	if has_node("Collision"):
+ 		return
+ 	var body := StaticBody3D.new()
+ 	body.name = "Collision"
+ 	body.collision_layer = GROUND_LAYERS
+ 	add_child(body)
+ 	var to_local := global_transform.affine_inverse()
+ 	for instance in find_children("*", "MeshInstance3D", true, false):
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scenes/levels/heavens_call.tscn scenes/levels/heavens_call.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/scenes/levels/heavens_call.tscn	2026-11-08 16:57:15.392148600 +0800
++++ scenes/levels/heavens_call.tscn	2026-11-08 16:59:24.099102400 +0800
+@@ -153,242 +153,319 @@
+ world_environment = NodePath("../WorldEnvironment")
+ mist = NodePath("../Mist")
+ storm = NodePath("../Storm")
+ follow = NodePath("../Player")
+ soundscape = NodePath("../Soundscape")
+ 
+ [node name="Debris" type="Node3D" parent="."]
+ 
+ [node name="Sword1" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(0.53901786, 0.10202675, -0.8360923, -0.020825997, 0.99394757, 0.10786329, 0.84203684, -0.04072779, 0.53788036, 10.038814, 59.978245, -102.024086)
++height_from_origin = true
+ 
+ [node name="Helmet1" parent="Debris" instance=ExtResource("14")]
+ transform = Transform3D(0.41035736, 0.33672315, 0.8474812, -0.20038807, 0.9399134, -0.27641895, -0.8896355, -0.05639455, 0.4531757, 7.235731, 61.337097, -100.12228)
++height_from_origin = true
+ 
+ [node name="Shield1" parent="Debris" instance=ExtResource("12")]
+ transform = Transform3D(0.694886, 0.3272262, -0.6403564, -0.07662161, 0.91909415, 0.38651657, 0.71502626, -0.21951984, 0.66373825, -11.063941, 67.55343, -104.10443)
++height_from_origin = true
+ 
+ [node name="Spear1" parent="Debris" instance=ExtResource("16")]
+ transform = Transform3D(0.9340951, 0.3319918, 0.13133135, -0.34254646, 0.93706924, 0.06755167, -0.10063997, -0.10808677, 0.9890343, -13.952429, 68.816246, -102.13309)
++height_from_origin = true
+ 
+ [node name="Helmet2" parent="Debris" instance=ExtResource("14")]
+ transform = Transform3D(-0.9458099, 0.32457855, -0.009616552, 0.31805643, 0.92002267, -0.22890694, -0.06545085, -0.21956104, -0.9734008, -17.319923, 69.78046, -103.89657)
++height_from_origin = true
+ 
+ [node name="Breastplate1" parent="Debris" instance=ExtResource("15")]
+ transform = Transform3D(0.9170356, 0.31770465, 0.24105927, -0.35773298, 0.9224826, 0.14509651, -0.17627513, -0.2192935, 0.9596028, -28.571781, 76.774185, -88.970055)
++height_from_origin = true
+ 
+ [node name="Sword2" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(-0.75783974, 0.09642529, 0.64527595, 0.029732853, 0.99309516, -0.11348128, -0.6517629, -0.066814736, -0.75547403, -30.499617, 78.07678, -86.104805)
++height_from_origin = true
+ 
+ [node name="Shield2" parent="Debris" instance=ExtResource("12")]
+ transform = Transform3D(-0.21457464, 0.31494057, 0.9245378, -0.15515122, 0.92357594, -0.3506217, -0.9643059, -0.2186777, -0.14931256, -34.035713, 78.98493, -87.28862)
++height_from_origin = true
+ 
+ [node name="Breastplate2" parent="Debris" instance=ExtResource("15")]
+ transform = Transform3D(-0.2952874, 0.30749667, -0.90457237, 0.3088225, 0.9266856, 0.2142021, 0.90412056, -0.21610112, -0.3686005, -47.015877, 85.4618, -78.51475)
++height_from_origin = true
+ 
+ [node name="Shield3" parent="Debris" instance=ExtResource("12")]
+ transform = Transform3D(-0.9114908, 0.30609846, 0.27475128, 0.22022797, 0.9273453, -0.30253983, -0.34739625, -0.21525437, -0.9126781, -52.907024, 86.423965, -80.446884)
++height_from_origin = true
+ 
+ [node name="Helmet3" parent="Debris" instance=ExtResource("14")]
+ transform = Transform3D(0.9153622, 0.30619618, -0.26144984, -0.22477812, 0.92736584, 0.299111, 0.33404633, -0.21502668, 0.91770184, -51.99712, 88.02959, -74.56112)
++height_from_origin = true
+ 
+ [node name="Sword3" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(-0.9257883, 0.06210192, -0.37290657, 0.093447134, 0.99339694, -0.06655934, 0.36631078, -0.096466914, -0.9254785, -55.109756, 87.238014, -79.96768)
++height_from_origin = true
+ 
+ [node name="Sword4" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(-0.37848186, 0.094651856, 0.9207565, -0.021657355, 0.9935799, -0.11104032, -0.92535526, -0.061967894, -0.37400204, -57.053394, 88.55639, -77.27188)
++height_from_origin = true
+ 
+ [node name="Spear2" parent="Debris" instance=ExtResource("16")]
+ transform = Transform3D(0.6526984, 0.19077584, 0.7332049, -0.37005645, 0.9247548, 0.088807836, -0.6610924, -0.3292919, 0.6741838, -58.40438, 89.538475, -74.96779)
++height_from_origin = true
+ 
+ [node name="Sword5" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(0.3512742, 0.093821995, -0.9315599, 0.028666355, 0.99342227, 0.11086202, 0.93583363, -0.06564739, 0.34627408, -55.90815, 90.27206, -70.11538)
++height_from_origin = true
+ 
+ [node name="Sword6" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(0.35231444, 0.09409607, 0.93113935, -0.09496233, 0.99339193, -0.06445618, -0.9310514, -0.06571432, 0.3589219, -57.63715, 91.38001, -68.03968)
++height_from_origin = true
+ 
+ [node name="Shield4" parent="Debris" instance=ExtResource("12")]
+ transform = Transform3D(0.6068629, 0.28766477, 0.74092263, -0.36883897, 0.9276776, -0.058070138, -0.7040421, -0.23804052, 0.66907513, -59.73011, 92.17168, -67.50984)
++height_from_origin = true
+ 
+ [node name="Helmet4" parent="Debris" instance=ExtResource("14")]
+ transform = Transform3D(0.9301129, 0.12862472, 0.34401393, -0.24344537, 0.91725236, 0.3152499, -0.27499866, -0.3769666, 0.88446134, -78.343346, 98.244675, -62.275074)
++height_from_origin = true
+ 
+ [node name="Sword7" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(0.4843269, 0.04060538, 0.8739443, -0.07687594, 0.9970337, -0.0037208907, -0.87150306, -0.06538316, 0.4860118, -81.50259, 99.56218, -60.388012)
++height_from_origin = true
+ 
+ [node name="Spear3" parent="Debris" instance=ExtResource("16")]
+ transform = Transform3D(-0.23813406, 0.12901804, 0.96262485, -0.2949186, 0.93473274, -0.19823667, -0.925373, -0.33110285, -0.18454188, -81.488625, 100.644905, -56.8508)
++height_from_origin = true
+ 
+ [node name="Shield5" parent="Debris" instance=ExtResource("12")]
+ transform = Transform3D(-0.008376518, 0.120153405, -0.99272, 0.36722574, 0.92375743, 0.10870793, 0.9300941, -0.36364174, -0.051861294, -92.66076, 110.29161, -34.384094)
++height_from_origin = true
+ 
+ [node name="Breastplate3" parent="Debris" instance=ExtResource("15")]
+ transform = Transform3D(0.98992145, 0.13191526, 0.05151704, -0.14161125, 0.9185153, 0.36915562, 0.0013780612, -0.3727304, 0.9279387, -94.15666, 113.09348, -27.869707)
++height_from_origin = true
+ 
+ [node name="Sword8" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(0.072473794, -0.01645641, -0.9972346, 0.002951954, 0.999863, -0.016285252, 0.99736595, -0.0017635365, 0.072512455, -94.43598, 114.715775, -10.960017)
++height_from_origin = true
+ 
+ [node name="Helmet5" parent="Debris" instance=ExtResource("14")]
+ transform = Transform3D(0.996359, -0.04806407, 0.07041716, 0.047948323, 0.99884427, 0.0033340917, -0.07049603, 5.4432694e-05, 0.9975121, -90.20854, 114.91987, -9.853993)
++height_from_origin = true
+ 
+ [node name="Spear4" parent="Debris" instance=ExtResource("16")]
+ transform = Transform3D(0.15561016, -0.03031802, -0.9873532, 0.009327814, 0.9995294, -0.029221812, 0.9877745, -0.004662635, 0.15581976, -86.317184, 115.07053, -15.027648)
++height_from_origin = true
+ 
+ [node name="Shield6" parent="Debris" instance=ExtResource("12")]
+ transform = Transform3D(-0.48240644, -0.04343382, 0.87487006, -0.02896949, 0.9990146, 0.033623226, -0.8754683, -0.009124477, -0.48318937, -83.24187, 115.194275, -5.9089527)
++height_from_origin = true
+ 
+ [node name="Sword9" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(-0.84658366, -0.1063634, -0.5215198, -0.11817889, 0.992935, -0.010668099, 0.5189699, 0.05260119, -0.8531725, -72.84488, 121.78461, -32.37323)
++height_from_origin = true
+ 
+ [node name="Helmet6" parent="Debris" instance=ExtResource("14")]
+ transform = Transform3D(0.7861651, -0.37800294, -0.48893574, 0.24045974, 0.91588783, -0.3214476, 0.5693185, 0.13514152, 0.8109336, -59.66756, 126.58834, -35.46231)
++height_from_origin = true
+ 
+ [node name="Traces" type="Node3D" parent="."]
+ 
+ [node name="Cairn1" parent="Traces" instance=ExtResource("18")]
+ transform = Transform3D(-0.33914107, 0, 0.49495795, 0, 0.6, 0, -0.49495795, 0, -0.33914107, -47.29602, 135.72856, -57.6146)
++height_from_origin = true
+ 
+ [node name="Scarf1" parent="Traces" instance=ExtResource("17")]
+ transform = Transform3D(-0.97791237, 0, 0.20901525, 0, 1, 0, -0.20901525, 0, -0.97791237, -16.469242, 148.35136, -61.05246)
++height_from_origin = true
+ 
+ [node name="Cairn2" parent="Traces" instance=ExtResource("18")]
+ transform = Transform3D(0.7405463, 0, 0.11870624, 0, 0.75, 0, -0.11870624, 0, 0.7405463, -2.384597, 152.13693, -56.31622)
++height_from_origin = true
+ 
+ [node name="Fire1" parent="Traces" instance=ExtResource("19")]
+ transform = Transform3D(0.63728905, 0.30802822, -0.70638615, -0.03179656, 0.9263705, 0.3752688, 0.76996857, -0.21669403, 0.60016, -24.28458, 163.11713, -36.420994)
++height_from_origin = true
+ 
+ [node name="Cairn3" parent="Traces" instance=ExtResource("18")]
+ transform = Transform3D(0.38210952, 0, -0.39559108, 0, 0.55, 0, 0.39559108, 0, 0.38210952, -25.317434, 164.46606, -33.341206)
++height_from_origin = true
+ 
+ [node name="Cairn4" parent="Traces" instance=ExtResource("18")]
+ transform = Transform3D(-0.19933756, 0, 0.7747674, 0, 0.8, 0, -0.7747674, 0, -0.19933756, -37.047646, 173.42996, -17.672247)
++height_from_origin = true
+ 
+ [node name="Scarf2" parent="Traces" instance=ExtResource("17")]
+ transform = Transform3D(-0.71922547, 0, -0.6947767, 0, 1, 0, 0.6947767, 0, -0.71922547, -42.320644, 183.24268, 7.581799)
++height_from_origin = true
+ 
+ [node name="Cairn5" parent="Traces" instance=ExtResource("18")]
+ transform = Transform3D(-0.5717924, 0, -0.40379876, 0, 0.7, 0, 0.40379876, 0, -0.5717924, -30.489542, 195.13127, 33.44996)
++height_from_origin = true
+ 
+ [node name="Cairn6" parent="Traces" instance=ExtResource("18")]
+ transform = Transform3D(-0.617651, 0, -0.6546046, 0, 0.9, 0, 0.6546046, 0, -0.617651, -4.8157187, 209.91606, 41.976105)
++height_from_origin = true
+ 
+ [node name="Rocks" type="Node3D" parent="."]
+ 
+ [node name="BoulderA1" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(-1.167338, 0.03752901, -0.275524, 0.027463073, 1.1987675, 0.04692828, 0.27670863, 0.039345358, -1.166998, 139.78091, 1.297368, -24.390575)
++height_from_origin = true
+ 
+ [node name="Shard1" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(0.67541176, 0.24056008, -0.3548942, -0.19842963, 0.7624064, 0.1391481, 0.38005883, -0.029450921, 0.70334053, 137.88881, 1.8049321, -26.629469)
++height_from_origin = true
+ 
+ [node name="BoulderB1" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(-0.39132974, 0.042714585, 0.8093432, 0.042074095, 0.89860797, -0.027082229, -0.8093768, 0.026060337, -0.3927213, 146.67252, 1.9756241, -44.56085)
++height_from_origin = true
+ 
+ [node name="BoulderA2" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(0.0322496, 0.11972233, -0.9922835, -0.14523903, 0.9828232, 0.113860585, 0.98887086, 0.14044632, 0.049084008, 125.74047, 5.4204655, -55.771427)
++height_from_origin = true
+ 
+ [node name="BoulderB2" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(0.3803509, 0.11353865, 0.44993582, -0.0012285591, 0.5820076, -0.14582764, -0.46403852, 0.09152148, 0.36917758, 125.20051, 6.40744, -58.58357)
++height_from_origin = true
+ 
+ [node name="Shard2" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(-0.6624595, 0.13002713, -0.18504137, 0.095538944, 0.6800206, 0.13580985, 0.20498702, 0.10327124, -0.6612983, 119.86247, 13.674327, -81.53415)
++height_from_origin = true
+ 
+ [node name="BoulderA3" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(0.7491651, 0.13637783, -0.24526048, -0.14580433, 0.7865603, -0.008000192, 0.2397764, 0.05219188, 0.76143503, 103.314354, 21.36031, -93.24005)
++height_from_origin = true
+ 
+ [node name="BoulderB3" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(-0.5529087, 0.20687038, 0.9281684, 0.16392125, 1.0783181, -0.14268811, -0.936708, 0.06659366, -0.5728381, 101.078384, 22.595972, -96.05821)
++height_from_origin = true
+ 
+ [node name="BoulderA4" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(0.01703661, 0.17726494, -0.88220567, 0.5439345, 0.7008802, 0.15133466, 0.71682984, -0.53604484, -0.09386654, 78.1673, 32.67013, -94.11311)
++height_from_origin = true
+ 
+ [node name="Shard3" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(0.39659673, 0.04640084, 0.44783705, -0.12388448, 0.58501476, 0.049095996, -0.43285528, -0.124918945, 0.39627212, 71.94139, 34.09203, -96.946945)
++height_from_origin = true
+ 
+ [node name="BoulderB4" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(-0.9540594, 0.18096715, -0.2387919, 0.16409852, 0.98243016, 0.088896915, 0.25068378, 0.045627546, -0.9669931, 56.569725, 40.812, -112.258415)
++height_from_origin = true
+ 
+ [node name="BoulderA5" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(1.2138908, 0.281308, -0.37058726, -0.2584251, 1.2687112, 0.116568424, 0.3868922, -0.035178687, 1.2405953, 32.98322, 50.305668, -102.01926)
++height_from_origin = true
+ 
+ [node name="Shard4" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(-0.5233162, 0.17659816, 0.83363855, 0.06979924, 0.98388594, -0.16461016, -0.8492751, -0.027955825, -0.5272098, 29.98254, 51.824665, -100.45836)
++height_from_origin = true
+ 
+ [node name="BoulderB5" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(-0.04512357, 0.121014416, -0.6879821, 0.028124, 0.68917173, 0.119379066, 0.6979777, -0.019945713, -0.049287573, 16.025366, 56.27661, -112.504585)
++height_from_origin = true
+ 
+ [node name="BoulderA6" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(0.71479106, 0.18803093, 0.814689, -0.14798449, 1.0833524, -0.12020021, -0.8229061, -0.03149391, 0.7292693, 2.459828, 63.31284, -97.93948)
++height_from_origin = true
+ 
+ [node name="BoulderB6" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(-0.77044994, 0.13196929, -0.1702674, 0.1476291, 0.7839367, -0.060406525, 0.15688382, -0.08959579, -0.77933306, -19.708584, 70.40339, -104.55951)
++height_from_origin = true
+ 
+ [node name="BoulderA7" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(0.9455214, 0.16012934, -0.28345695, -0.12003165, 0.98080254, 0.15368392, 0.3026246, -0.11128762, 0.9465905, -34.198505, 80.53431, -81.77292)
++height_from_origin = true
+ 
+ [node name="BoulderA8" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(-0.55966884, 0.083056964, 0.6999088, -0.07076735, 0.88259095, -0.16132334, -0.70125794, -0.15535371, -0.5423122, -53.35048, 85.63031, -82.97536)
++height_from_origin = true
+ 
+ [node name="Shard5" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(-0.15990324, -0.37957132, -0.80022275, 0.4701926, 0.652728, -0.40356532, 0.7505663, -0.48976701, 0.08233145, -52.295624, 108.165184, -71.05536)
++height_from_origin = true
+ 
+ [node name="BoulderB7" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(0.51715267, 0.04816783, 0.46928987, -0.1270715, 0.68482774, 0.06974091, -0.45431918, -0.13671438, 0.5146875, -66.22278, 92.635826, -71.42132)
++height_from_origin = true
+ 
+ [node name="BoulderA9" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(-0.76330274, 0.1204803, -0.20701073, 0.1378188, 0.78642106, -0.0504767, 0.19589518, -0.08382372, -0.77110225, -85.96382, 101.710434, -55.82839)
++height_from_origin = true
+ 
+ [node name="Shard6" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(0.844746, 0.05619311, -0.3053629, 0.0056651, 0.88220096, 0.17801501, 0.31043854, -0.16900821, 0.82768595, -79.323265, 107.27397, -38.020267)
++height_from_origin = true
+ 
+ [node name="BoulderB8" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(-0.54827595, -0.0025924528, 0.83629346, -0.048526935, 0.9984089, -0.028719373, -0.8348884, -0.056328904, -0.54752934, -97.937744, 113.92914, -25.291374)
++height_from_origin = true
+ 
+ [node name="BoulderA10" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(0.82807285, -0.033266395, 0.86786455, 0.019537002, 1.1995295, 0.027338328, -0.8682821, -0.004735547, 0.8282898, -77.06611, 115.3973, -7.280098)
++height_from_origin = true
+ 
+ [node name="Shard7" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(-0.9579467, -0.20802146, -0.49906436, -0.2619098, 1.0667853, 0.0580715, 0.47301307, 0.16939934, -0.97855127, -67.87706, 119.51066, -20.1738)
++height_from_origin = true
+ 
+ [node name="BoulderA11" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(0.90931666, -0.10923964, -0.40150958, 0.03505987, 0.9816069, -0.18766642, 0.4146252, 0.15657131, 0.89642143, -54.150604, 128.57039, -36.723675)
++height_from_origin = true
+ 
+ [node name="BoulderB9" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(-0.28143647, -0.07627012, 0.6363775, 0.07043136, 0.68713665, 0.11350172, -0.63705015, 0.109663524, -0.26859072, -61.837963, 128.87076, -47.037514)
++height_from_origin = true
+ 
+ [node name="Shard8" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(-0.51329046, -0.17015813, -0.7194297, -0.14572479, 0.8819399, -0.104624666, 0.7247738, 0.05681767, -0.5305417, -38.555576, 137.52974, -49.941536)
++height_from_origin = true
+ 
+ [node name="BoulderA12" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(1.0802255, -0.2030203, -0.04353951, 0.20244044, 1.0810571, -0.018263754, 0.04616055, 0.009922559, 1.0989863, -29.72063, 143.21387, -69.062546)
++height_from_origin = true
+ 
+ [node name="BoulderB10" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(-0.30686364, -0.009341312, 0.7387473, -0.02570873, 0.7995866, -0.00056837575, -0.7383589, -0.023958333, -0.30700526, -4.761476, 151.14711, -72.48212)
++height_from_origin = true
+ 
+ [node name="BoulderA13" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(-0.08181904, 0.16639479, 0.9826588, -0.09993037, 0.9796263, -0.17420177, -0.9916247, -0.11245048, -0.063524194, -10.187189, 156.14606, -42.56478)
++height_from_origin = true
+ 
+ [node name="Shard9" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(-0.45464438, 0.19145773, -1.0939116, 0.19799857, 1.1770684, 0.12372106, 1.0927466, -0.13361987, -0.4775465, -19.64848, 161.30975, -36.80273)
++height_from_origin = true
+ 
+ [node name="BoulderB11" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(0.63257533, 0.05879825, 0.6374882, -0.16140376, 0.88189363, 0.078819074, -0.6195137, -0.16972443, 0.6303938, -40.28161, 167.0586, -35.160656)
++height_from_origin = true
+ 
+ [node name="BoulderA14" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(-0.8665815, 0.059056737, -0.49552888, 0.1402568, 0.9817707, -0.12827463, 0.47892022, -0.18066171, -0.85906744, -35.6098, 175.49757, -12.857394)
++height_from_origin = true
+ 
+ [node name="Shard10" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(0.77667326, -0.19137003, -0.01250252, 0.18299495, 0.723924, 0.28713572, -0.057372868, -0.28162313, 0.7465901, -37.899426, 179.85368, -4.7029047)
++height_from_origin = true
+ 
+ [node name="BoulderB12" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(-0.9609443, -0.1827391, 0.20782806, -0.20919141, 0.9713002, -0.113203086, -0.18117683, -0.1522577, -0.97159284, -40.20393, 186.34102, 17.118008)
++height_from_origin = true
+ 
+ [node name="BoulderA15" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(0.18552557, -0.12649919, -1.1788037, 0.31397328, 1.1557913, -0.07461512, 1.1432415, -0.29689154, 0.21178849, -21.426743, 193.3661, 26.284452)
++height_from_origin = true
+ 
+ [node name="Shard11" parent="Rocks" instance=ExtResource("22")]
+ transform = Transform3D(0.018131547, -0.08625731, 0.79512954, -0.055455443, 0.7932841, 0.087321684, -0.7978697, -0.057096917, 0.012000038, -25.859455, 200.48512, 49.642353)
++height_from_origin = true
+ 
+ [node name="BoulderB13" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(0.50068164, -0.23587699, -0.70970404, 0.014710092, 0.8570049, -0.27445617, 0.74773085, 0.14108373, 0.4806182, -9.189081, 207.642, 42.32368)
++height_from_origin = true
+ 
+ [node name="BoulderA16" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(-0.71401817, 0, 0.547885, 0.07703421, 0.8910594, 0.10039301, -0.5424423, 0.1265426, -0.7069252, 7, 214.5204, 30.476988)
++height_from_origin = true
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/case.gd tests/case.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/case.gd	2026-11-08 16:57:15.428191500 +0800
++++ tests/case.gd	2026-11-08 17:01:58.784725800 +0800
+@@ -28,20 +28,31 @@
+ func check_near(actual: float, expected: float, tolerance: float, message: String) -> void:
+ 	if absf(actual - expected) > tolerance:
+ 		failures.append("%s: expected %.3f ± %.3f, got %.3f" % [message, expected, tolerance, actual])
+ 
+ 
+ func frames(count: int) -> void:
+ 	for i in count:
+ 		await tree.process_frame
+ 
+ 
++## Waits `count` physics ticks and then one whole _process pass, so a value updated in
++## _physics_process (progress, respawn) and anything applied from it in _process (the mood) are
++## both current. Process frames alone don't guarantee a physics tick (fast frames), and a slow
++## frame can run every tick at once; process_frame fires *before* nodes' _process, hence two.
++func physics_frames(count: int) -> void:
++	for i in count:
++		await tree.physics_frame
++	await tree.process_frame
++	await tree.process_frame
++
++
+ func seconds(duration: float) -> void:
+ 	await tree.create_timer(duration).timeout
+ 
+ 
+ ## Image tests need a real renderer: the headless display server draws nothing.
+ ## Usage: `if not needs_window(): return`
+ func needs_window() -> bool:
+ 	if DisplayServer.get_name() == "headless":
+ 		skipped = "needs a window (run without --headless)"
+ 		return false
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_mood.gd tests/test_heavens_mood.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_mood.gd	2026-11-08 16:57:15.435230100 +0800
++++ tests/test_heavens_mood.gd	2026-11-08 17:01:52.796705200 +0800
+@@ -18,30 +18,30 @@
+ 
+ func test_sample_blends_between_keys(_lv) -> void:
+ 	var a: float = MoodDirector.sample(0.28).wind
+ 	var b: float = MoodDirector.sample(0.57).wind
+ 	var mid: float = MoodDirector.sample(0.425).wind
+ 	check(mid > minf(a, b) - 0.001 and mid < maxf(a, b) + 0.001, "blend stays between keys")
+ 
+ 
+ func test_mood_ignores_backtracking(lv) -> void:
+ 	lv.player.global_position = lv.trail.point_at(0.7)
+-	await frames(3)
++	await physics_frames(3)
+ 	var w: float = lv.mood.current.wind
+ 	lv.player.global_position = lv.trail.point_at(0.1)
+-	await frames(3)
++	await physics_frames(3)
+ 	check_near(lv.mood.current.wind, w, 0.001, "walking back down keeps the mood")
+ 
+ 
+ func test_no_lightning_before_eerie(lv) -> void:
+ 	lv.player.global_position = lv.trail.point_at(0.4)
+-	await frames(2)
++	await physics_frames(2)
+ 	check_eq(lv.storm.rate_per_min, 0.0, "storm silent in discovery")
+ 
+ 
+ func test_flash_schedules_distant_thunder(lv) -> void:
+ 	var delays := []
+ 	lv.storm.flashed.connect(func(d: float) -> void: delays.append(d))
+ 	lv.storm.flash()
+ 	await frames(1)
+ 	check(delays.size() == 1 and delays[0] >= 2.5 and delays[0] <= 6.0, "thunder 2.5-6 s after flash")
+ 
+@@ -63,21 +63,21 @@
+ 	lv.reset_scene()
+ 	check_eq(lv.storm.flash_count, 0, "flash count reset")
+ 	check_near(lv.mood.current.wind, MoodDirector.KEYS[0].wind, 0.001, "mood back at the ascent key")
+ 	check_eq(lv.storm.rate_per_min, 0.0, "storm silent after reset")
+ 
+ 
+ func test_walking_down_never_respawns(lv) -> void:
+ 	lv.furthest_progress = 0.6
+ 	var spot: Vector3 = lv.trail.point_at(0.3) + Vector3.UP
+ 	lv.player.global_position = spot
+-	await frames(4)
++	await physics_frames(4)
+ 	check(lv.player.global_position.distance_to(spot) < 1.0, "she stays where she walked down to")
+ 	check_near(lv.furthest_progress, 0.6, 0.001, "furthest progress kept")
+ 
+ 
+ ## Ruling 3: with the camera goal behind the mountain, the camera pulls in to the near side.
+ func test_camera_stays_out_of_terrain(lv) -> void:
+ 	var cam: FollowCamera = lv.follow_cam
+ 	check_eq(cam.collision_mask, 2, "level camera collides with the ground layer")
+ 	lv.player.global_position = lv.trail.point_at(0.3) + Vector3.UP
+ 	cam.pitch_deg = 0.0
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_props.gd tests/test_heavens_props.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_props.gd	2026-11-08 16:57:15.439231300 +0800
++++ tests/test_heavens_props.gd	2026-11-08 16:58:21.832111200 +0800
+@@ -14,22 +14,36 @@
+ 	check(n >= 20 and n <= 30, "20-30 debris pieces, got %d" % n)
+ 
+ 
+ func test_traces_near_the_top(lv) -> void:
+ 	for t: Node3D in lv.get_node("Traces").get_children():
+ 		var p: float = lv.trail.progress_at(t.global_position)
+ 		check(p >= 0.59 and p <= 0.96, "%s at progress %.2f" % [t.name, p])
+ 
+ 
+ func test_props_leave_the_path_walkable(lv) -> void:
+-	await frames(2)
++	await physics_frames(2)
+ 	var space: PhysicsDirectSpaceState3D = lv.get_world_3d().direct_space_state
+ 	var shape := SphereShape3D.new()
+ 	shape.radius = 0.4
+ 	var q := PhysicsShapeQueryParameters3D.new()
+ 	q.shape = shape
+ 	q.collision_mask = 1
+ 	q.exclude = [lv.player.get_rid()]  # she stands on the trail at progress 0; only props count
+ 	for i in 140:
+ 		var p: Vector3 = lv.trail.point_at(i / 140.0)
+ 		q.transform = Transform3D(Basis(), p + Vector3.UP * 0.9)
+ 		check(space.intersect_shape(q, 1).is_empty(), "centreline clear at %.3f" % (i / 140.0))
++
++
++## Every kit piece on the mountain sways and shades from its own origin (flat_color's
++## height_from_origin), not from world y = 0 hundreds of metres below.
++func test_level_kit_measures_from_origin(lv) -> void:
++	var n := 0
++	for group in ["Debris", "Traces", "Rocks"]:
++		for kit: Node3D in lv.get_node(group).get_children():
++			check(kit.height_from_origin, "%s/%s opts in" % [group, kit.name])
++			for g in kit.find_children("*", "GeometryInstance3D", true, false):
++				check((g as GeometryInstance3D).get_instance_shader_parameter("height_from_origin") == true,
++						"%s/%s mesh %s has the parameter on" % [group, kit.name, g.name])
++				n += 1
++	check(n >= 77, "meshes checked: %d" % n)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_trail.gd tests/test_heavens_trail.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_heavens_trail.gd	2026-11-08 16:57:15.436228100 +0800
++++ tests/test_heavens_trail.gd	2026-11-08 16:58:21.889912100 +0800
+@@ -32,13 +32,13 @@
+ 
+ func test_progress_is_monotonic_along_trail(lv) -> void:
+ 	check_near(lv.trail.progress_at(lv.trail.point_at(0.0)), 0.0, 0.01, "foot = 0")
+ 	check_near(lv.trail.progress_at(lv.trail.point_at(0.5)), 0.5, 0.01, "middle = 0.5")
+ 	check_near(lv.trail.progress_at(lv.trail.point_at(1.0)), 1.0, 0.01, "summit = 1")
+ 
+ 
+ func test_fall_respawns_on_trail(lv) -> void:
+ 	lv.furthest_progress = 0.4
+ 	lv.player.global_position = lv.trail.point_at(0.4) + Vector3(0, -40, 0)
+-	await frames(3)
++	await physics_frames(3)
+ 	check(lv.player.global_position.distance_to(lv.trail.point_at(0.4)) < 2.5, "put back at furthest point")
+ 	check_near(lv.furthest_progress, 0.4, 0.001, "progress not reset by the fall")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_kit_height_origin.gd tests/test_kit_height_origin.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tests/test_kit_height_origin.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_kit_height_origin.gd	2026-11-08 16:58:41.301792800 +0800
+@@ -0,0 +1,14 @@
++extends "res://tests/case.gd"
++## The playground's kit pieces keep flat_color's world-height sway and contact shade:
++## height_from_origin is a per-instance opt-in for the Heavens call mountain.
++
++
++func test_playground_kit_keeps_world_height(pg) -> void:
++	var kits: Array = pg.find_children("*", "Node3D", true, false).filter(
++			func(n: Node) -> bool: return n.get_script() != null and n.get_script().resource_path.ends_with("kit_asset.gd"))
++	check(kits.size() > 10, "playground has kit pieces: %d" % kits.size())
++	for kit: Node3D in kits:
++		check(not kit.height_from_origin, "%s stays on world height" % kit.name)
++		for g in kit.find_children("*", "GeometryInstance3D", true, false):
++			check((g as GeometryInstance3D).get_instance_shader_parameter("height_from_origin") != true,
++					"%s mesh %s has no origin-height parameter" % [kit.name, g.name])
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tools/place_heavens_props.gd tools/place_heavens_props.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/tools/place_heavens_props.gd	2026-11-08 16:57:15.463468800 +0800
++++ tools/place_heavens_props.gd	2026-11-08 16:59:16.386808000 +0800
+@@ -1,18 +1,19 @@
+ extends SceneTree
+ ## One-off staging helper for Heavens call (Task 5). The tables below are the hand-authored
+ ## placement: every prop is given as (progress along the trail, metres right (+) or left (-) of
+ ## the centreline, yaw relative to the walking direction, sink, scale, how much it leans with the
+ ## ground). This script only resolves the ground height and slope under each prop and prints the
+ ## `Debris`, `Traces` and `Rocks` nodes as .tscn text with plain baked transforms, which were
+-## pasted into scenes/levels/heavens_call.tscn. The scene is the source of truth; re-run only to
+-## re-stage from scratch:
++## pasted into scenes/levels/heavens_call.tscn. Every piece gets height_from_origin = true
++## (kit_asset.gd), since the mountain is far above y = 0. The scene is the source of truth;
++## re-run only to re-stage from scratch:
+ ##   Godot --headless --path . -s res://tools/place_heavens_props.gd > out.txt
+ 
+ const KIT := "res://scenes/environment/kit/"
+ ## Scene file per kind, with the ext_resource id it gets in heavens_call.tscn.
+ const KINDS := {
+ 	"shield": ["prop_shield_broken", "12"],
+ 	"sword": ["prop_sword_planted", "13"],
+ 	"helmet": ["prop_helmet", "14"],
+ 	"breastplate": ["prop_breastplate", "15"],
+ 	"spear": ["prop_spear_broken", "16"],
+@@ -148,21 +149,22 @@
+ 
+ func _group(group: String, rows: Array) -> String:
+ 	var s := '[node name="%s" type="Node3D" parent="."]\n\n' % group
+ 	var counts := {}
+ 	for row: Array in rows:
+ 		var kind: String = row[0]
+ 		counts[kind] = counts.get(kind, 0) + 1
+ 		var xf := _place(row)
+ 		var name := "%s%d" % [kind.capitalize().replace(" ", ""), counts[kind]]
+ 		s += '[node name="%s" parent="%s" instance=ExtResource("%s")]\n' % [name, group, KINDS[kind][1]]
+-		s += "transform = %s\n\n" % var_to_str(xf)
++		s += "transform = %s\n" % var_to_str(xf)
++		s += "height_from_origin = true\n\n"  # sway and shade from its own origin, not y = 0
+ 		printerr("%s/%s progress %.3f -> %.3f, %.1f m from centre" % [group, name, row[1],
+ 				_trail.progress_at(xf.origin), _trail.distance_to_centre(xf.origin)])
+ 	return s
+ 
+ 
+ func _place(row: Array) -> Transform3D:
+ 	var progress: float = row[1]
+ 	var lateral: float = row[2]
+ 	var c := _trail.point_at(progress)
+ 	var ahead := _trail.point_at(minf(progress + 0.003, 1.0)) - _trail.point_at(maxf(progress - 0.003, 0.0))
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/docs/ASSET_PIPELINE.md docs/ASSET_PIPELINE.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/docs/ASSET_PIPELINE.md	2026-11-08 16:57:15.533780200 +0800
++++ docs/ASSET_PIPELINE.md	2026-11-08 17:02:52.711809900 +0800
+@@ -41,20 +41,24 @@
+ 
+ Each GLB has a wrapper scene in `scenes/environment/kit/<name>.tscn`. The wrapper is a `Node3D`
+ running `kit_asset.gd` with the GLB instanced as a child. **Always place the wrapper, not the
+ GLB**, otherwise the palette materials (and with them sway, tint variation and fog response) are missing.
+ 
+ Per-material look settings are in `assets/materials/*.tres`:
+ - `sway`: wind bend. 0 = rigid. All parts of one object must share the same value.
+ - `tint_variation`: per-object brightness and temperature jitter, so 80 copies of one tree
+   don't read as copies.
+ 
++A kit wrapper placed far above y = 0 (the Heavens call mountain) needs `height_from_origin = true`
++on its `kit_asset.gd` root. Sway and the contact shade then grow with height above the piece's own
++origin rather than world height. It is off by default, which keeps the playground unchanged.
++
+ ## Adding a new asset
+ 
+ 1. Write a builder function in `build_kit.py` (or model it by hand following the conventions),
+    then add it to `ASSETS`.
+ 2. Run the script. In Blender, check silhouette, scale (next to a 1.8 m reference) and
+    orientation.
+ 3. Copy any wrapper in `scenes/environment/kit/`, point it at the new GLB, and place it.
+ 4. Check it in the game from the main viewpoints, with Notan and Squint on. A new asset has to
+    help the composition, not just exist.
+ 
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/assets/materials/flat_color.gdshader assets/materials/flat_color.gdshader
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/fix/assets/materials/flat_color.gdshader	2026-11-08 16:57:15.623451100 +0800
++++ assets/materials/flat_color.gdshader	2026-11-08 16:57:51.143971000 +0800
+@@ -1,46 +1,56 @@
+ // Faceted, single-colour stylized surface.
+ // Normals are rebuilt per-face from screen derivatives, so smooth primitives
+ // (spheres, cylinders) read as low-poly facets without custom meshes.
+-// Optional wind sway: displacement grows with height above the object's origin (its ground
+-// contact), so trunks stay planted while crowns move, at any altitude.
+-// Gusts travel across the world, not per object.
++// Optional wind sway: displacement grows with height above the ground, so trunks stay
++// planted while crowns move. Gusts travel across the world, not per object.
++// Kit instances on high ground (the Heavens call mountain) set the instance uniform
++// height_from_origin (kit_asset.gd does it): sway and the contact shade then use height above the
++// object's origin instead of world height. Off by default, so other scenes are unchanged.
+ shader_type spatial;
+ 
+ #include "res://assets/shaders/wind.gdshaderinc"
+ 
+ uniform vec4 albedo : source_color = vec4(0.5, 0.5, 0.5, 1.0);
+ uniform float roughness : hint_range(0.0, 1.0) = 0.95;
+ uniform vec4 emission : source_color = vec4(0.0, 0.0, 0.0, 1.0);
+ uniform float emission_energy : hint_range(0.0, 16.0) = 0.0;
+ // Darkens surfaces near the ground to visually anchor objects (cheap fake contact shade).
+ uniform float base_darkening : hint_range(0.0, 1.0) = 0.35;
+ uniform float base_height = 1.5;
+ // 0 = rigid. Parts of one object must share the same value or they drift apart.
+ uniform float sway : hint_range(0.0, 2.0) = 0.0;
+ uniform float sway_frequency : hint_range(0.1, 10.0) = 1.0;
+ // Per-object brightness/temperature jitter (seeded by the object's world position), so
+ // repeated instances of one asset don't read as copies. 0 = off.
+ uniform float tint_variation : hint_range(0.0, 0.5) = 0.0;
++// Per instance: measure height from the node's origin, not from world y = 0 (see the header).
++instance uniform bool height_from_origin = false;
+ 
+-varying float world_y;  // height above the object's origin
++varying float world_y;
+ 
+ void vertex() {
+ 	vec3 world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+-	world_y = world.y - NODE_POSITION_WORLD.y;  // height above the origin, for the contact shade
++	world_y = world.y;
++	if (height_from_origin) {
++		world_y -= NODE_POSITION_WORLD.y;
++	}
+ 	if (sway > 0.0) {
+ 		float phase = dot(world.xz, wind_direction) * 0.12;
+ 		float gust = 0.1 + 0.9 * wind_gust(world.xz);  // patchy gusts travel downwind (avg ~0.55, as before)
+ 		float t = TIME * sway_frequency;
+ 		float wave = sin(t * 1.3 - phase) + 0.3 * sin(t * 3.7 - phase * 2.3);
+-		float h = max(world.y - NODE_POSITION_WORLD.y, 0.0);  // height above the origin, not sea level
+-		float bend = sway * wind_strength * gust * wave * h * h * 0.006;
++		float bend = sway * wind_strength * gust * wave * world.y * world.y * 0.006;
++		if (height_from_origin) {
++			float h = max(world.y - NODE_POSITION_WORLD.y, 0.0);
++			bend = sway * wind_strength * gust * wave * h * h * 0.006;
++		}
+ 		world.xz += wind_direction * bend;
+ 		VERTEX = (inverse(MODEL_MATRIX) * vec4(world, 1.0)).xyz;
+ 	}
+ }
+ 
+ float hash(vec2 p) {
+ 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+ }
+ 
+ void fragment() {
+# new/changed binary or audio files:

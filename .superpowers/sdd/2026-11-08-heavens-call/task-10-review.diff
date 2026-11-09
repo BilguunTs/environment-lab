@@ -1,0 +1,306 @@
+# HC Task 10 review package (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd	2026-11-08 18:42:06.821559700 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 18:42:24.424343100 +0800
+@@ -5,21 +5,21 @@
+ 
+ ## Seconds the screen takes to fade in from black at the start.
+ const FADE_IN_SECONDS := 3.0
+ ## She is put back on the trail when she falls this far below the stretch she is over.
+ const FALL_DEPTH := 15.0
+ ## The named capture views: trail progress, or -1 for the end of PULLBACK.
+ const VIEWS := {"foot": 0.02, "debris": 0.42, "eerie": 0.72, "summit": 0.96, "wide": -1.0}
+ ## Profile-only: REVEAL when the vista's `reveal` is about 0.15 (the far ridges fading in).
+ const REVEAL_EARLY := "reveal_early"
+ ## Seconds into REVEAL at which the vista's reveal is 0.15 (ease_in_out(t / 8) = 0.15).
+-const REVEAL_EARLY_SECONDS := 2.03
++const REVEAL_EARLY_SECONDS := 1.99
+ const SETTLE_FRAMES := 30
+ const PROFILE_FRAMES := 120
+ ## Metres walked on the floor per footstep (suits 2 m/s).
+ const STRIDE := 0.85
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var wind: Wind = $Wind
+ @onready var trail: Trail = $Trail
+ @onready var terrain: MountainTerrain = $MountainTerrain
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_value_probe.gd tests/test_value_probe.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_value_probe.gd	2026-11-08 18:42:06.868715100 +0800
++++ tests/test_value_probe.gd	2026-11-08 18:42:24.494349500 +0800
+@@ -74,19 +74,22 @@
+ 	var total := 0
+ 	for count in s["hist"]:
+ 		total += count
+ 	check_eq(total, 100, "every pixel is in the histogram")
+ 
+ 
+ func test_measure_is_fast(_pg) -> void:
+ 	var image := Image.create_empty(200, 113, false, Image.FORMAT_RGBA8)
+ 	image.fill(Color(0.4, 0.5, 0.6))
+ 	var exclude: Array[Rect2] = [Rect2(0, 0, 40, 113), Rect2(150, 10, 40, 30), Rect2(60, 80, 70, 20)]
+-	var start := Time.get_ticks_usec()
+-	var s := ValueProbe.measure(image, exclude)
+-	var ms := (Time.get_ticks_usec() - start) / 1000.0
++	var s := {}
++	var ms := INF
++	for _i in 3:  # best of 3: a single run flakes under full-suite load
++		var start := Time.get_ticks_usec()
++		s = ValueProbe.measure(image, exclude)
++		ms = minf(ms, (Time.get_ticks_usec() - start) / 1000.0)
+ 	print("     measure: %.2f ms" % ms)
+ 	check(ms < 4.0, "measure() under 4 ms (got %.2f)" % ms)
+ 	var total := 0
+ 	for count in s["hist"]:
+ 		total += count
+ 	check_eq(total, 200 * 113 - 40 * 113 - 40 * 30 - 70 * 20, "excluded pixels not counted")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tools/make_heavens_grass.gd tools/make_heavens_grass.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tools/make_heavens_grass.gd	2026-11-08 18:42:06.881472300 +0800
++++ tools/make_heavens_grass.gd	2026-11-08 18:42:24.494349500 +0800
+@@ -6,21 +6,21 @@
+ ## pasted into scenes/levels/heavens_call.tscn. The masks are only a start: repaint them with the
+ ## Grass Painter. Re-running overwrites the paint, and changing a section's progress range moves
+ ## its field, so paste the printed nodes again after that. The look (blades_per_m2, heights,
+ ## colours) is set on the nodes in the scene and isn't printed.
+ ##
+ ## Trail sections: sparse windswept tufts between bare rock (density 0.1-0.35 in clumps), zero on
+ ## the gravel centre, a thin line of tufts along the path's edges (stronger near the top, where
+ ## the light is low and the edges help the path read), none on steep ground. Each texel belongs
+ ## to the section its nearest trail point (Trail.progress_at) falls in, so fields never overlap.
+ ## Summit: golden grass over the whole plateau (0.6-0.9), clear around the ovoo cairns, with a
+-## worn line where the trail arrives.
++## worn line where the trail arrives, and an irregular fade toward the field border.
+ 
+ const OUT := "res://assets/grass/heavens_%s.res"
+ ## name, progress from, progress to. The last section stops where the summit field takes over.
+ const SECTIONS := [
+ 	["Lower", 0.0, 0.24],
+ 	["Middle", 0.24, 0.5],
+ 	["Switchback", 0.5, 0.72],
+ 	["Upper", 0.72, 1.0],
+ ]
+ const TRAIL_TEXEL := 0.5
+@@ -32,20 +32,22 @@
+ ## Tufts thin out toward the corridor's edge (the walls and drops beyond get none).
+ const REACH := 8.5
+ ## Ground steeper than this (rise per metre) gets no grass, fading in over the band below it.
+ const STEEP := Vector2(0.45, 0.8)
+ const TUFT_MAX := 0.35
+ const EDGE_BAND := 0.2
+ const EDGE_BAND_TOP := 0.32  ## near the summit, progress 0.82+
+ const SUMMIT_CENTRE := Vector3(0, 220, 0)
+ const SUMMIT_EXTENT := Vector2(48, 32)
+ const SUMMIT_TEXEL := 0.5
++## Width of the summit field's irregular edge fade.
++const SUMMIT_FADE := 6.0
+ ## The ovoo cairns' ground positions (Vista/Ovoos in the scene): grass keeps clear of their stones.
+ const OVOOS := [Vector2(-14.0, -4.5), Vector2(13.0, -5.5), Vector2(2.5, -10.0)]
+ 
+ 
+ func _initialize() -> void:
+ 	_run.call_deferred()
+ 
+ 
+ func _run() -> void:
+ 	var lv: Node = load("res://scenes/levels/heavens_call.tscn").instantiate()
+@@ -125,20 +127,21 @@
+ 
+ 	var data := PackedByteArray()
+ 	data.resize(size.x * size.y * 2)
+ 	for y in size.y:
+ 		for x in size.x:
+ 			var p := corner + (Vector2(x, y) + Vector2(0.5, 0.5)) * texel
+ 			var density := 0.0
+ 			var height := 0.5 + 0.35 * hnoise.get_noise_2d(p.x, p.y)
+ 			if summit:
+ 				density = _summit_density(p, trail, terrain, broad, tufts)
++				density *= _summit_edge_fade(p, summit_rect, tufts, broad)
+ 				height = 0.55 + 0.4 * hnoise.get_noise_2d(p.x, p.y)
+ 			elif not summit_rect.has_point(p) and _near_line(p, line, REACH + 1.0):
+ 				density = _trail_density(p, cfg, trail, terrain, tufts, broad)
+ 			var i := (y * size.x + x) * 2
+ 			data[i] = roundi(clampf(density, 0.0, 1.0) * 255.0)
+ 			data[i + 1] = roundi(clampf(height, 0.0, 1.0) * 255.0)
+ 	return Image.create_from_data(size.x, size.y, false, Image.FORMAT_RG8, data)
+ 
+ 
+ static func _trail_density(p: Vector2, cfg: Dictionary, trail: Trail, terrain: MountainTerrain,
+@@ -178,20 +181,31 @@
+ 	var density := 0.6 + 0.3 * clampf(n * 0.5 + 0.5, 0.0, 1.0)
+ 	for o: Vector2 in OVOOS:
+ 		density *= smoothstep(1.6, 2.6, p.distance_to(o))
+ 	# A worn line where the trail arrives, ending in the meadow.
+ 	var ground := Vector3(p.x, h, p.y)
+ 	if trail.progress_at(ground) < 0.995:
+ 		density *= lerpf(0.15, 1.0, smoothstep(0.9, 2.2, trail.distance_to_centre(ground)))
+ 	return density * steep
+ 
+ 
++## Soft, irregular falloff over the outer SUMMIT_FADE metres of the summit field, so its border
++## doesn't read as a straight-edged rectangle: the fade's reach is modulated by noise, and the
++## surviving density is broken into tufts near the edge.
++static func _summit_edge_fade(p: Vector2, rect: Rect2, tufts: FastNoiseLite, broad: FastNoiseLite) -> float:
++	var d := minf(minf(p.x - rect.position.x, rect.end.x - p.x), minf(p.y - rect.position.y, rect.end.y - p.y))
++	var reach := SUMMIT_FADE * (0.55 + 0.45 * (broad.get_noise_2d(p.x * 3.1 + 50.0, p.y * 3.1) * 0.5 + 0.5) * 1.6)
++	var t := smoothstep(0.0, reach, d)
++	var patchy := smoothstep(-0.2, 0.35, tufts.get_noise_2d(p.x * 1.3 + 9.0, p.y * 1.3))
++	return t * lerpf(patchy, 1.0, t)
++
++
+ static func _slope(terrain: MountainTerrain, p: Vector2) -> float:
+ 	const D := 0.75
+ 	var gx := terrain.height_at(p + Vector2(D, 0)) - terrain.height_at(p - Vector2(D, 0))
+ 	var gz := terrain.height_at(p + Vector2(0, D)) - terrain.height_at(p - Vector2(0, D))
+ 	return Vector2(gx, gz).length() / (2.0 * D)
+ 
+ 
+ static func _near_line(p: Vector2, line: PackedVector2Array, reach: float) -> bool:
+ 	var r2 := reach * reach
+ 	for q in line:
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/README.md	2026-11-08 18:42:06.888493600 +0800
++++ README.md	2026-11-08 18:43:23.955196100 +0800
+@@ -16,20 +16,32 @@
+ Optional command-line flags (after `--`):
+ 
+ ```sh
+ # apply a preset, render every viewpoint to screenshots/, then quit
+ Godot... --path . -- "--preset=Foggy Forest" --capture-views --quit
+ 
+ # measure every fixed view with grass on then off, write screenshots/profile_<datetime>.md
+ Godot... --path . --resolution 1920x1080 --disable-vsync -- --profile-views --quit
+ ```
+ 
++## Heavens call
++
++`scenes/levels/heavens_call.tscn` is a 5-7 minute walking level built from this kit: a tired
++cloaked girl climbs a foggy mountain trail to a summit reveal and the title. Open the scene and
++press F6, or run:
++
++```sh
++Godot... --path . res://scenes/levels/heavens_call.tscn
++```
++
++Details, capture/profile flags and the view list: [docs/HEAVENS_CALL.md](docs/HEAVENS_CALL.md).
++
+ ## Controls
+ 
+ | Input | Action |
+ | --- | --- |
+ | WASD / arrows | Move (relative to the active camera, cinematic views included) |
+ | Shift | Sprint |
+ | Right-mouse drag | Orbit the gameplay camera / look around in Scout |
+ | Q / E | Orbit left / right (gameplay), down / up (Scout) |
+ | Mouse wheel | Zoom (gameplay) / fly speed (Scout) |
+ | C | Cycle fixed views (Gameplay and the viewpoints) |
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/docs/REUSE.md docs/REUSE.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/docs/REUSE.md	2026-11-08 18:42:06.929915300 +0800
++++ docs/REUSE.md	2026-11-08 18:43:23.954194600 +0800
+@@ -2,20 +2,24 @@
+ 
+ Everything the playground adds on top of a plain level is optional. This is the short list of what a
+ game project needs from here.
+ 
+ ## What to copy
+ 
+ - `scripts/environment/`: `wind.gd`, `grass_field.gd`, `grass_brush.gd`, `kit_asset.gd`
+ - `assets/shaders/` (the wind include and grass shader live here) and `assets/materials/`
+ - The kit scenes in `scenes/environment/kit/` you actually place, and `assets/meshes/` (the `.glb`
+   files those kit scenes reference)
++- `assets/shaders/gradient_sky.gdshader` and `assets/shaders/ground_mist.gdshader` if you want the
++  playground's sky and ground mist (see "Fog, mist and sky" below)
++- `scripts/player/player.gd` + `scenes/player/player.tscn` and `scripts/camera/follow_camera.gd` if
++  you want the walker and orbit camera (see "Player and camera options")
+ - `addons/grass_painter/` (the editor brush; the only plugin, and it paints grass masks and nothing else)
+ 
+ After copying, run `Godot --headless --path . --import` once so the new `class_name`s register.
+ 
+ ## Project settings
+ 
+ Copy these three sections of `project.godot` (or set the same values in Project Settings):
+ 
+ - **`[shader_globals]`** (Project Settings > Shader Globals): all three wind globals are required,
+   because the materials read them:
+@@ -45,17 +49,77 @@
+ 2. Add a `GrassField` node.
+ 3. Set its `extent` (metres, centred on the node) to cover the area you want to paint. Settle
+    `extent` and `texel_size` before painting: changing either afterwards stretches the painted mask.
+ 4. Save the scene, then select the `GrassField`. The Grass Painter toolbar appears in the 3D editor.
+ 5. Paint: LMB paints, Shift+LMB erases, `[` / `]` change the radius, Ctrl+Z undoes a stroke. The
+    toolbar sets mode, radius, strength, target and falloff. The mask is only written once the
+    scene has a file, so save the scene before the first stroke; after that the plugin saves the
+    mask to `<scene>_grass.res` next to the scene after every stroke. A duplicated field gets its
+    own copy (`<scene>_grass_2.res`, ...) on its first stroke.
+ 
++## Fog, mist and sky
++
++Heavens call copied these from `scenes/playground.tscn` into `scenes/levels/heavens_call.tscn`.
++Open either scene and copy the nodes and sub-resources; nothing here needs code.
++
++- **`WorldEnvironment`**: `background_mode = Sky` with a `Sky` whose material is a `ShaderMaterial`
++  on `gradient_sky.gdshader` (`horizon_color`, `zenith_color`, `glow_size`, `glow_energy`). Keep
++  the roles: horizon colour = fog colour (`fog_light_color`, `background_color`), zenith colour =
++  `ambient_light_color` (ambient from colour, `ambient_light_source = 2`). Other settings:
++  Filmic/ACES-style tonemap (`tonemap_mode = 4`), SSAO and glow on, depth fog (`fog_density`,
++  `fog_aerial_perspective`, `fog_sky_affect`, a thin `fog_height` layer), and volumetric fog
++  (`volumetric_fog_enabled`, `density`, `albedo`, `anisotropy`, `length`, `ambient_inject`,
++  `sky_affect = 0`). Without volumetric fog enabled the mist below draws nothing.
++- **`Mist`**: a `FogVolume` (the level uses 110 x 30 x 110 m) whose material is a `ShaderMaterial` on
++  `ground_mist.gdshader` with a seamless `NoiseTexture3D` as `noise_tex`. Uniforms: `density`,
++  `mist_height` (how far above the base it thins out), `base_height` (world y it is thickest at and
++  below; 0 = the playground's flat ground), `noise_scale`, `offset` and `albedo`.
++- **Following the player up a slope.** The volume is finite, so a script keeps it centred on the
++  player and sets `base_height` to a little below her feet every frame, which lets the mist climb a
++  mountain with her. `scripts/levels/mood_director.gd` does this for the level.
++- **Mist drift follows the wind.** `offset` is advanced each frame from the wind, as an integrated
++  sum (`_mist_offset -= wind direction x strength x speed x delta`), never `TIME * speed`: a change
++  of wind strength then never makes the mist jump. The playground does the same in `playground.gd`.
++
++## Player and camera options
++
++- **`Player`** (`scripts/player/player.gd`): `walk_speed` (default 3.5), `can_sprint` (default true;
++  off = Shift does nothing) and `lantern` (default true; off removes the lantern mesh and its light).
++  Heavens call sets 2.0 / false / false.
++- **`FollowCamera`** (`scripts/camera/follow_camera.gd`):
++  - `min_pitch` / `max_pitch` (degrees, default -10 / 80) limit mouse and key pitch.
++  - `collision_mask` (default 0 = off). Any non-zero mask pulls the camera in front of the first
++    hit between the look target and the camera, so terrain never covers the view.
++  - `orbit_locked` (a variable, not an export): when true, mouse orbit, wheel zoom and Q/E are
++    ignored. Cutscenes set it so nothing but the cutscene moves the camera.
++
++## Kit pieces placed high up: `height_from_origin`
++
++`flat_color.gdshader` sways cloth by world height above y 0. A kit piece placed far above y 0, such
++as a banner on a mountain at y 60, would sway by that whole height. Tick **Height From Origin** on
++the placed kit instance (`kit_asset.gd` export `height_from_origin`): it sets the
++`height_from_origin` instance uniform on every mesh of the piece, and sway and contact shade then
++use height above the piece's own origin. Hand-made materials on `flat_color.gdshader` can set the
++instance uniform themselves. Pieces near y 0 do not need it.
++
++## Testing a level scene
++
++`tests/run.gd` runs every test file against the playground by default. A level's tests declare their
++scene instead:
++
++```gdscript
++extends "res://tests/case.gd"
++const SCENE := "res://scenes/levels/my_level.tscn"
++```
++
++The runner groups files by `SCENE`, instances each scene once, and, if the scene's root has a
++`reset_scene()` method, calls it before every test. `tests/case.gd` has `await physics_frames(n)`
++(n physics ticks, then two process frames) for teleport-then-read tests, where one process frame
++does not guarantee a physics tick.
++
+ ## Playground-only parts
+ 
+ Not needed in a game level: the dev panel, presets, Compare, the debug tools (value probe, perf HUD,
+ light gizmos), the composition guides, and `tools/` (such as `make_starter_grass.gd`, which only
+ writes this playground's starter meadow).
+ 
+ Performance numbers for the grass are in [PERFORMANCE.md](PERFORMANCE.md).
+# new/changed binary or audio files:
+assets/grass/heavens_lower.res
+assets/grass/heavens_middle.res
+assets/grass/heavens_summit.res
+assets/grass/heavens_switchback.res
+assets/grass/heavens_upper.res

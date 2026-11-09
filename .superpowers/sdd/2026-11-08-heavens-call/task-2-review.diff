@@ -1,0 +1,813 @@
+# HC Task 2 review package (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd	2026-11-08 15:47:22.758297400 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 16:01:11.554439200 +0800
+@@ -1,38 +1,67 @@
+ class_name HeavensCall
+ extends Node3D
+ ## "Heavens call": a tired girl climbs a foggy mountain trail to a summit reveal. This root owns
+ ## the level's state and its reset; the trail, mood, sound, vista and summit systems hook in here.
+ 
+ ## Seconds the screen takes to fade in from black at the start.
+ const FADE_IN_SECONDS := 3.0
++## She is put back on the trail when she falls this far below the stretch she is over.
++const FALL_DEPTH := 15.0
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var wind: Wind = $Wind
++@onready var trail: Trail = $Trail
++@onready var terrain: MountainTerrain = $MountainTerrain
+ @onready var _fade: ColorRect = $UI/Fade
+ 
+-var _player_start: Transform3D
++## Furthest progress (0 = foot, 1 = summit) she has reached along the trail. It only ever
++## increases, so walking back down or falling never undoes the mood.
++var furthest_progress := 0.0
++
+ var _fade_tween: Tween
+ 
+ 
+ func _ready() -> void:
+-	_player_start = player.global_transform
+ 	reset_scene()
+ 
+ 
+-## Puts the girl back at the trail start, restarts the fade-in from black, and resets the mood
+-## and the sequence (later tasks extend this).
++func _physics_process(_delta: float) -> void:
++	var pos := player.global_position
++	var progress := trail.progress_at(pos)
++	furthest_progress = maxf(furthest_progress, progress)
++	if pos.y < trail.point_at(progress).y - FALL_DEPTH:
++		respawn()
++
++
++## Puts the girl back at the trail start facing up the trail, restarts the fade-in from black,
++## and resets the progress, the mood and the sequence (later tasks extend this).
+ func reset_scene() -> void:
+-	player.global_transform = _player_start
++	furthest_progress = 0.0
++	_place_on_trail(0.0)
++	_restart_fade()
++
++
++## Puts her back on the trail at the furthest point she reached, at rest.
++func respawn() -> void:
++	_place_on_trail(furthest_progress)
++
++
++func _place_on_trail(progress: float) -> void:
++	player.global_position = trail.point_at(progress) + Vector3.UP
+ 	player.velocity = Vector3.ZERO
+-	follow_cam.yaw_deg = 0.0
++	var ahead := trail.point_at(minf(progress + 2.0 / trail.length(), 1.0)) - trail.point_at(progress)
++	if progress >= 1.0:
++		ahead = trail.point_at(1.0) - trail.point_at(1.0 - 2.0 / trail.length())
++	var dir := Vector2(ahead.x, ahead.z).normalized()
++	player.get_node("Model").rotation.y = atan2(dir.x, dir.y)
++	follow_cam.yaw_deg = rad_to_deg(atan2(-dir.x, -dir.y))
+ 	follow_cam.snap()
+-	_restart_fade()
+ 
+ 
+ func _restart_fade() -> void:
+ 	if _fade_tween:
+ 		_fade_tween.kill()
+ 	_fade.color.a = 1.0
+ 	_fade_tween = create_tween()
+ 	_fade_tween.tween_property(_fade, "color:a", 0.0, FADE_IN_SECONDS)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/mountain_terrain.gd scripts/levels/mountain_terrain.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/mountain_terrain.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/levels/mountain_terrain.gd	2026-11-08 16:06:12.273674400 +0800
+@@ -0,0 +1,458 @@
++@tool
++class_name MountainTerrain
++extends Node3D
++## The Heavens call mountain, generated around `trail`: one faceted ArrayMesh plus a trimesh
++## StaticBody3D (layers 1 + 2), both internal children with no owner, so the scene file stays
++## small. Rebuilt when the node enters the tree (editor and game) and live in the editor when the
++## trail's curve or a setting changes.
++##
++## How a height is made:
++## - The massif: a steep flat-topped block whose top is the summit plateau (`summit_size`,
++##   centred on the trail's end, long side across the final approach) and whose sides fall at
++##   `cliff_slope`, roughened with noise. The trail was authored along its contours, so the
++##   massif rises above the uphill side of the trail and falls away below the downhill side.
++## - The corridor: within `corridor` metres of the centreline (narrowed at `narrows`), the ground
++##   follows the trail's height with a gentle cross-slope. Where two legs of a switchback are
++##   close, their heights blend, which leaves a steep bank between them.
++## - Under the corridor: wherever the trail runs above the massif (the summit ridge, the
++##   switchback landings), a cliff falls from the corridor's edge at `cliff_slope`, so the trail
++##   never floats.
++## - Beyond the corridor's edge the ground ramps over `RAMP` metres into whichever is higher:
++##   a wall rises or a drop falls, both steeper than 50 degrees, so the corridor is bounded.
++
++## Width of the blend from the corridor's edge into the rock, in metres.
++const RAMP := 2.0
++## Rise of the corridor's cross-slope toward the uphill side, per metre.
++const CROSS_SLOPE := 0.06
++## Trail samples further apart than this along the trail belong to different legs.
++const LEG_SEPARATION := 30.0
++## The outermost ring of the mesh drops to this height, a cliff edge into the fog.
++const SKIRT_Y := -200.0
++
++@export var trail: Trail:
++	set(value):
++		trail = value
++		_queue_rebuild()
++## Size of the generated ground in metres, centred on this node.
++@export var extent := Vector2(360, 360):
++	set(value):
++		extent = value
++		_queue_rebuild()
++## Grid spacing in metres.
++@export var cell := 1.5:
++	set(value):
++		cell = maxf(value, 0.25)
++		_queue_rebuild()
++## Seeds the rock noise.
++@export var seed := 7:
++	set(value):
++		seed = value
++		_queue_rebuild()
++## Walkable half-width either side of the centreline, in metres.
++@export var corridor := 9.0:
++	set(value):
++		corridor = value
++		_queue_rebuild()
++## Chokepoints: each (progress, half-width) narrows the corridor to that half-width, easing back
++## out over NARROW_FALLOFF metres of trail either side.
++@export var narrows := PackedVector2Array():
++	set(value):
++		narrows = value
++		_queue_rebuild()
++## Summit plateau size (across the final approach, along it), centred on the trail's end.
++@export var summit_size := Vector2(40, 25):
++	set(value):
++		summit_size = value
++		_queue_rebuild()
++## Steepness of the massif's sides and of the drops below the trail (rise per metre; 1.7 = 60 deg).
++@export var cliff_slope := 1.7:
++	set(value):
++		cliff_slope = value
++		_queue_rebuild()
++@export var trail_color := Color(0.47, 0.41, 0.32):
++	set(value):
++		trail_color = value
++		_queue_rebuild()
++@export var rock_color := Color(0.28, 0.29, 0.3):
++	set(value):
++		rock_color = value
++		_queue_rebuild()
++
++const NARROW_FALLOFF := 14.0
++const SAMPLE_STEP := 0.75
++
++var _heights := PackedFloat32Array()
++var _nx := 0
++var _nz := 0
++var _mesh_instance: MeshInstance3D
++var _body: StaticBody3D
++var _rebuild_queued := false
++var _watched_curve: Curve3D
++
++# Massif frame, in this node's space.
++var _summit_y := 0.0
++var _summit_centre := Vector2.ZERO
++var _summit_axis := Vector2.RIGHT
++
++
++func _ready() -> void:
++	rebuild()
++
++
++## Regenerates the mesh and the collision from the trail and the settings.
++func rebuild() -> void:
++	_rebuild_queued = false
++	if not is_inside_tree():
++		return
++	_watch_curve()
++	_clear()
++	if trail == null or trail.curve == null or trail.length() <= 0.0:
++		return
++	_build()
++
++
++## Ground height at world `xz`, as the mesh and the collision have it.
++func height_at(xz: Vector2) -> float:
++	if _heights.is_empty():
++		return global_position.y
++	var local := to_local(Vector3(xz.x, 0.0, xz.y))
++	var fx := clampf((local.x + extent.x * 0.5) / cell, 0.0, _nx - 0.0001)
++	var fz := clampf((local.z + extent.y * 0.5) / cell, 0.0, _nz - 0.0001)
++	var ix := int(fx)
++	var iz := int(fz)
++	var tx := fx - ix
++	var tz := fz - iz
++	var h00 := _heights[iz * (_nx + 1) + ix]
++	var h10 := _heights[iz * (_nx + 1) + ix + 1]
++	var h01 := _heights[(iz + 1) * (_nx + 1) + ix]
++	var h11 := _heights[(iz + 1) * (_nx + 1) + ix + 1]
++	# Same split as the mesh: triangles (00, 10, 01) and (10, 11, 01).
++	var y: float
++	if tx + tz <= 1.0:
++		y = h00 + (h10 - h00) * tx + (h01 - h00) * tz
++	else:
++		y = h11 + (h01 - h11) * (1.0 - tx) + (h10 - h11) * (1.0 - tz)
++	return (global_transform * Vector3(local.x, y, local.z)).y
++
++
++func _queue_rebuild() -> void:
++	if _rebuild_queued or not is_inside_tree():
++		return
++	_rebuild_queued = true
++	rebuild.call_deferred()
++
++
++func _watch_curve() -> void:
++	if not Engine.is_editor_hint():
++		return
++	var c: Curve3D = trail.curve if trail else null
++	if c == _watched_curve:
++		return
++	if _watched_curve and _watched_curve.changed.is_connected(_queue_rebuild):
++		_watched_curve.changed.disconnect(_queue_rebuild)
++	_watched_curve = c
++	if c:
++		c.changed.connect(_queue_rebuild)
++
++
++func _clear() -> void:
++	for child in [_mesh_instance, _body]:
++		if is_instance_valid(child):
++			remove_child(child)
++			child.queue_free()
++	_mesh_instance = null
++	_body = null
++	_heights = PackedFloat32Array()
++
++
++func _massif(x: float, z: float) -> float:
++	return _summit_y - cliff_slope * maxf(_summit_sdf(x, z), 0.0)
++
++
++## Signed horizontal distance from the summit plateau's edge (negative inside).
++func _summit_sdf(x: float, z: float) -> float:
++	var q := Vector2(x, z) - _summit_centre
++	var along := q.dot(_summit_axis)
++	var half := maxf(summit_size.x - summit_size.y, 0.0) * 0.5
++	var c := _summit_axis * clampf(along, -half, half)
++	return (q - c).length() - summit_size.y * 0.5
++
++
++func _corridor_at(s: float, total: float) -> float:
++	var c := corridor
++	for n in narrows:
++		var d := absf(s - n.x * total)
++		var w := 1.0 - smoothstep(0.0, NARROW_FALLOFF, d)
++		c = minf(c, lerpf(corridor, n.y, w))
++	return c
++
++
++func _build() -> void:
++	var total := trail.length()
++	# Trail samples in this node's space.
++	var count := int(ceil(total / SAMPLE_STEP)) + 1
++	var sp := PackedVector3Array()
++	var sc := PackedFloat32Array()  # corridor half-width
++	var ss := PackedFloat32Array()  # distance along the trail
++	sp.resize(count)
++	sc.resize(count)
++	ss.resize(count)
++	for i in count:
++		var s := minf(i * SAMPLE_STEP, total)
++		sp[i] = to_local(trail.point_at(s / total))
++		sc[i] = _corridor_at(s, total)
++		ss[i] = s
++	var end := sp[count - 1]
++	var before := sp[maxi(count - 4, 0)]
++	var approach := Vector2(end.x - before.x, end.z - before.z).normalized()
++	_summit_y = end.y
++	_summit_centre = Vector2(end.x, end.z)
++	_summit_axis = Vector2(-approach.y, approach.x)
++	# Uphill direction of the massif at each sample, for the cross-slope.
++	var su := PackedVector2Array()
++	su.resize(count)
++	for i in count:
++		var x := sp[i].x
++		var z := sp[i].z
++		var g := Vector2(_massif(x + 0.5, z) - _massif(x - 0.5, z), _massif(x, z + 0.5) - _massif(x, z - 0.5))
++		su[i] = g.normalized() if g.length_squared() > 1e-6 else Vector2.ZERO
++
++	_nx = int(round(extent.x / cell))
++	_nz = int(round(extent.y / cell))
++	var w := _nx + 1
++	var n := w * (_nz + 1)
++	var x0 := -extent.x * 0.5
++	var z0 := -extent.y * 0.5
++
++	# Nearest sample (and nearest sample on a different leg) for every vertex near the trail.
++	var d1 := PackedFloat32Array()
++	var d2 := PackedFloat32Array()
++	var i1 := PackedInt32Array()
++	var i2 := PackedInt32Array()
++	d1.resize(n)
++	d2.resize(n)
++	i1.resize(n)
++	i2.resize(n)
++	d1.fill(INF)
++	d2.fill(INF)
++	i1.fill(-1)
++	i2.fill(-1)
++	for si in count:
++		var p := sp[si]
++		var reach := sc[si] + RAMP + cell
++		var ix_a := maxi(int(floor((p.x - reach - x0) / cell)), 0)
++		var ix_b := mini(int(ceil((p.x + reach - x0) / cell)), _nx)
++		var iz_a := maxi(int(floor((p.z - reach - z0) / cell)), 0)
++		var iz_b := mini(int(ceil((p.z + reach - z0) / cell)), _nz)
++		var reach2 := reach * reach
++		var s := ss[si]
++		for iz in range(iz_a, iz_b + 1):
++			var dz := z0 + iz * cell - p.z
++			for ix in range(ix_a, ix_b + 1):
++				var dx := x0 + ix * cell - p.x
++				var dd := dx * dx + dz * dz
++				if dd > reach2:
++					continue
++				var d := sqrt(dd)
++				var k := iz * w + ix
++				var b1 := i1[k]
++				if b1 < 0 or absf(s - ss[b1]) < LEG_SEPARATION:
++					if d < d1[k]:
++						d1[k] = d
++						i1[k] = si
++				elif i2[k] < 0 or absf(s - ss[i2[k]]) < LEG_SEPARATION:
++					if d < d1[k]:
++						d2[k] = d1[k]
++						i2[k] = b1
++						d1[k] = d
++						i1[k] = si
++					elif d < d2[k]:
++						d2[k] = d
++						i2[k] = si
++				elif d < d1[k]:
++					d2[k] = d1[k]
++					i2[k] = b1
++					d1[k] = d
++					i1[k] = si
++				elif d < d2[k]:
++					d2[k] = d
++					i2[k] = si
++
++	# Corridor height (ht) and membership (m) per vertex.
++	var ht := PackedFloat32Array()
++	var m := PackedFloat32Array()
++	ht.resize(n)
++	m.resize(n)
++	var cliff := PackedFloat32Array()  # seeds of the drop below the trail
++	cliff.resize(n)
++	cliff.fill(-INF)
++	for k in n:
++		var a := i1[k]
++		if a < 0:
++			continue
++		var x := x0 + (k % w) * cell
++		var z := z0 + (k / w) * cell
++		var a1 := 1.0 - smoothstep(sc[a], sc[a] + RAMP, d1[k])
++		var h1 := _corridor_height(sp[a], su[a], x, z)
++		var wt1 := a1 / (d1[k] * d1[k] + 0.01)
++		var sum := h1 * wt1
++		var wsum := wt1
++		var mm := a1
++		var b := i2[k]
++		if b >= 0:
++			var a2 := 1.0 - smoothstep(sc[b], sc[b] + RAMP, d2[k])
++			var wt2 := a2 / (d2[k] * d2[k] + 0.01)
++			sum += _corridor_height(sp[b], su[b], x, z) * wt2
++			wsum += wt2
++			mm = maxf(mm, a2)
++		if wsum > 0.0:
++			ht[k] = sum / wsum
++			m[k] = mm
++			if mm >= 1.0:
++				cliff[k] = ht[k]
++
++	# The drop below the trail: max over corridor vertices of (height - slope * distance),
++	# a two-pass chamfer distance transform.
++	var straight := cliff_slope * cell
++	var diagonal := straight * sqrt(2.0)
++	for iz in _nz + 1:
++		for ix in w:
++			var k := iz * w + ix
++			var v := cliff[k]
++			if ix > 0:
++				v = maxf(v, cliff[k - 1] - straight)
++			if iz > 0:
++				v = maxf(v, cliff[k - w] - straight)
++				if ix > 0:
++					v = maxf(v, cliff[k - w - 1] - diagonal)
++				if ix < _nx:
++					v = maxf(v, cliff[k - w + 1] - diagonal)
++			cliff[k] = v
++	for iz in range(_nz, -1, -1):
++		for ix in range(_nx, -1, -1):
++			var k := iz * w + ix
++			var v := cliff[k]
++			if ix < _nx:
++				v = maxf(v, cliff[k + 1] - straight)
++			if iz < _nz:
++				v = maxf(v, cliff[k + w] - straight)
++				if ix < _nx:
++					v = maxf(v, cliff[k + w + 1] - diagonal)
++				if ix > 0:
++					v = maxf(v, cliff[k + w - 1] - diagonal)
++			cliff[k] = v
++
++	# Final heights and colours.
++	var broad := FastNoiseLite.new()
++	broad.seed = seed
++	broad.frequency = 0.011
++	broad.fractal_octaves = 3
++	var crag := FastNoiseLite.new()
++	crag.seed = seed + 1
++	crag.frequency = 0.07
++	crag.fractal_octaves = 2
++	var tint := FastNoiseLite.new()
++	tint.seed = seed + 2
++	tint.frequency = 0.05
++	_heights.resize(n)
++	var colors := PackedColorArray()
++	colors.resize(n)
++	var path_in := trail.width * 0.5
++	for k in n:
++		var ix := k % w
++		var iz := k / w
++		var x := x0 + ix * cell
++		var z := z0 + iz * cell
++		var rough := smoothstep(-1.0, 6.0, _summit_sdf(x, z))
++		var rock := _massif(x, z) + rough * (8.0 * broad.get_noise_2d(x, z) + 2.5 * crag.get_noise_2d(x, z))
++		rock = maxf(rock, cliff[k] + 2.0 * crag.get_noise_2d(x + 300.0, z))
++		var y := lerpf(rock, ht[k], m[k])
++		if ix == 0 or iz == 0 or ix == _nx or iz == _nz:
++			y = SKIRT_Y
++		_heights[k] = y
++		var dc := INF
++		if i1[k] >= 0:
++			dc = d1[k]
++		if i2[k] >= 0:
++			dc = minf(dc, d2[k])
++		var c := trail_color.lerp(rock_color, smoothstep(path_in, path_in + 1.5, dc))
++		var v := 1.0 + 0.08 * tint.get_noise_2d(x, z)
++		colors[k] = Color(c.r * v, c.g * v, c.b * v)
++
++	_make_nodes(colors)
++
++
++## Trail height at sample `p` extended to (x, z) with the cross-slope rising uphill.
++func _corridor_height(p: Vector3, uphill: Vector2, x: float, z: float) -> float:
++	var lateral := uphill.dot(Vector2(x - p.x, z - p.z))
++	return p.y + clampf(CROSS_SLOPE * lateral, -0.6, 0.6)
++
++
++func _make_nodes(colors: PackedColorArray) -> void:
++	var w := _nx + 1
++	var x0 := -extent.x * 0.5
++	var z0 := -extent.y * 0.5
++	var quads := _nx * _nz
++	var verts := PackedVector3Array()
++	var normals := PackedVector3Array()
++	var cols := PackedColorArray()
++	verts.resize(quads * 6)
++	normals.resize(quads * 6)
++	cols.resize(quads * 6)
++	var o := 0
++	for iz in _nz:
++		for ix in _nx:
++			var k := iz * w + ix
++			var p00 := Vector3(x0 + ix * cell, _heights[k], z0 + iz * cell)
++			var p10 := Vector3(p00.x + cell, _heights[k + 1], p00.z)
++			var p01 := Vector3(p00.x, _heights[k + w], p00.z + cell)
++			var p11 := Vector3(p00.x + cell, _heights[k + w + 1], p00.z + cell)
++			# Clockwise seen from above, so the faces point up.
++			var n1 := (p01 - p00).cross(p10 - p00).normalized()
++			var n2 := (p01 - p10).cross(p11 - p10).normalized()
++			verts[o] = p00
++			verts[o + 1] = p10
++			verts[o + 2] = p01
++			verts[o + 3] = p10
++			verts[o + 4] = p11
++			verts[o + 5] = p01
++			normals[o] = n1
++			normals[o + 1] = n1
++			normals[o + 2] = n1
++			normals[o + 3] = n2
++			normals[o + 4] = n2
++			normals[o + 5] = n2
++			cols[o] = colors[k]
++			cols[o + 1] = colors[k + 1]
++			cols[o + 2] = colors[k + w]
++			cols[o + 3] = colors[k + 1]
++			cols[o + 4] = colors[k + w + 1]
++			cols[o + 5] = colors[k + w]
++			o += 6
++	var arrays := []
++	arrays.resize(Mesh.ARRAY_MAX)
++	arrays[Mesh.ARRAY_VERTEX] = verts
++	arrays[Mesh.ARRAY_NORMAL] = normals
++	arrays[Mesh.ARRAY_COLOR] = cols
++	var mesh := ArrayMesh.new()
++	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
++	var mat := StandardMaterial3D.new()
++	mat.vertex_color_use_as_albedo = true
++	mat.vertex_color_is_srgb = true
++	mat.roughness = 0.95
++	mesh.surface_set_material(0, mat)
++
++	_mesh_instance = MeshInstance3D.new()
++	_mesh_instance.name = "TerrainMesh"
++	_mesh_instance.mesh = mesh
++	add_child(_mesh_instance, false, Node.INTERNAL_MODE_BACK)
++
++	var shape := ConcavePolygonShape3D.new()
++	shape.set_faces(verts)
++	var col := CollisionShape3D.new()
++	col.shape = shape
++	_body = StaticBody3D.new()
++	_body.name = "TerrainBody"
++	_body.collision_layer = 3
++	_body.add_child(col)
++	add_child(_body, false, Node.INTERNAL_MODE_BACK)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/trail.gd scripts/levels/trail.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/trail.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/levels/trail.gd	2026-11-08 16:06:38.229315500 +0800
+@@ -0,0 +1,127 @@
++@tool
++class_name Trail
++extends Path3D
++## The authored trail centreline of the Heavens call climb: `curve` runs from the foot (offset 0)
++## to the summit plateau. Progress along it (0..1) drives the mood, the respawn and the terrain.
++
++## Width of the worn path surface, in metres (the terrain paints it in `trail_color`).
++@export var width := 3.0
++
++## How much a height difference counts when matching a position to the trail: 1 = true 3D
++## distance, 0 = horizontal only. In between keeps a player who fell far below a ledge matched
++## to that ledge, while a player standing on one leg of a switchback isn't matched to the leg
++## above or below her.
++const VERTICAL_WEIGHT := 0.35
++## progress_at scans every this-many baked points first (the curve bakes every 0.5 m).
++const COARSE_STEP := 6
++
++var _points := PackedVector3Array()  # baked centreline, local space
++var _offsets := PackedFloat32Array()  # distance along the curve of each baked point
++var _cached_curve: Curve3D
++
++
++## Total length of the centreline in metres.
++func length() -> float:
++	return curve.get_baked_length() if curve else 0.0
++
++
++## The world position at `progress` (0 = foot, 1 = summit) along the centreline.
++func point_at(progress: float) -> Vector3:
++	if not curve:
++		return global_position
++	return global_transform * curve.sample_baked(clampf(progress, 0.0, 1.0) * length())
++
++
++## Progress (0..1) of the centreline point closest to `world_pos`, with height differences
++## down-weighted by VERTICAL_WEIGHT (see there).
++func progress_at(world_pos: Vector3) -> float:
++	var l := length()
++	if l <= 0.0:
++		return 0.0
++	return _closest(to_local(world_pos)).x / l
++
++
++## Horizontal distance from `world_pos` to the centreline (to the stretch progress_at matches).
++func distance_to_centre(world_pos: Vector3) -> float:
++	var local := to_local(world_pos)
++	var c := _closest(local)
++	var p := global_transform * Vector3(c.y, 0.0, c.z)
++	p.y = 0.0
++	return Vector2(world_pos.x - p.x, world_pos.z - p.z).length()
++
++
++## Closest centreline point to `local`: returns (offset, x, z) in local space.
++func _closest(local: Vector3) -> Vector3:
++	_ensure_cache()
++	var n := _points.size()
++	if n == 0:
++		return Vector3.ZERO
++	# Coarse pass over every COARSE_STEP-th baked point, then a fine pass around the winner.
++	var best := 0
++	var best_d := INF
++	for i in range(0, n, COARSE_STEP):
++		var d := _metric(_points[i] - local)
++		if d < best_d:
++			best_d = d
++			best = i
++	var coarse := best
++	for i in range(maxi(coarse - COARSE_STEP, 0), mini(coarse + COARSE_STEP + 1, n)):
++		var d := _metric(_points[i] - local)
++		if d < best_d:
++			best_d = d
++			best = i
++	# Refine on the two segments either side of the nearest baked point.
++	var result := Vector3(_offsets[best], _points[best].x, _points[best].z)
++	for j in [best - 1, best]:
++		if j < 0 or j + 1 >= n:
++			continue
++		var a := _points[j]
++		var b := _points[j + 1]
++		var ab := _squash(b - a)
++		var len2 := ab.length_squared()
++		if len2 <= 0.0:
++			continue
++		var t := clampf(_squash(local - a).dot(ab) / len2, 0.0, 1.0)
++		var q := a.lerp(b, t)
++		var d := _metric(q - local)
++		if d < best_d:
++			best_d = d
++			result = Vector3(lerpf(_offsets[j], _offsets[j + 1], t), q.x, q.z)
++	return result
++
++
++static func _squash(v: Vector3) -> Vector3:
++	return Vector3(v.x, v.y * VERTICAL_WEIGHT, v.z)
++
++
++static func _metric(v: Vector3) -> float:
++	return _squash(v).length_squared()
++
++
++func _ensure_cache() -> void:
++	if _cached_curve == curve and not _points.is_empty():
++		return
++	if _cached_curve and _cached_curve.changed.is_connected(_invalidate):
++		_cached_curve.changed.disconnect(_invalidate)
++	_cached_curve = curve
++	_points = PackedVector3Array()
++	_offsets = PackedFloat32Array()
++	if not curve:
++		return
++	curve.changed.connect(_invalidate)
++	_points = curve.get_baked_points()
++	_offsets.resize(_points.size())
++	var acc := 0.0
++	for i in _points.size():
++		if i > 0:
++			acc += _points[i].distance_to(_points[i - 1])
++		_offsets[i] = acc
++	# The baked offsets sum the polyline; scale them to the curve's own baked length.
++	if acc > 0.0:
++		var k := curve.get_baked_length() / acc
++		for i in _offsets.size():
++			_offsets[i] *= k
++
++
++func _invalidate() -> void:
++	_points = PackedVector3Array()
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn scenes/levels/heavens_call.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn	2026-11-08 15:47:22.774366800 +0800
++++ scenes/levels/heavens_call.tscn	2026-11-08 16:05:39.712312900 +0800
+@@ -1,18 +1,19 @@
+ [gd_scene format=3]
+ 
+ [ext_resource type="Script" path="res://scripts/levels/heavens_call.gd" id="1"]
+ [ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="2"]
+ [ext_resource type="Script" path="res://scripts/camera/follow_camera.gd" id="3"]
+ [ext_resource type="Script" path="res://scripts/environment/wind.gd" id="4"]
+ [ext_resource type="Shader" path="res://assets/shaders/gradient_sky.gdshader" id="5"]
+-[ext_resource type="Material" path="res://assets/materials/ground.tres" id="6"]
++[ext_resource type="Script" path="res://scripts/levels/trail.gd" id="6"]
++[ext_resource type="Script" path="res://scripts/levels/mountain_terrain.gd" id="7"]
+ 
+ [sub_resource type="ShaderMaterial" id="sky_material"]
+ shader = ExtResource("5")
+ shader_parameter/horizon_color = Color(0.6, 0.62, 0.63, 1)
+ shader_parameter/zenith_color = Color(0.36, 0.42, 0.5, 1)
+ shader_parameter/glow_size = 0.25
+ shader_parameter/glow_energy = 0.48
+ 
+ [sub_resource type="Sky" id="sky"]
+ sky_material = SubResource("sky_material")
+@@ -38,52 +39,52 @@
+ fog_height = 1.5
+ fog_height_density = 0.06
+ volumetric_fog_enabled = true
+ volumetric_fog_density = 0.004
+ volumetric_fog_albedo = Color(0.78, 0.85, 0.95, 1)
+ volumetric_fog_anisotropy = 0.45
+ volumetric_fog_length = 80.0
+ volumetric_fog_ambient_inject = 0.2
+ volumetric_fog_sky_affect = 0.0
+ 
+-[sub_resource type="PlaneMesh" id="ground_mesh"]
+-size = Vector2(400, 400)
+-
+-[sub_resource type="BoxShape3D" id="ground_shape"]
+-size = Vector3(400, 1, 400)
++[sub_resource type="Curve3D" id="trail_curve"]
++bake_interval = 0.5
++_data = {
++"points": PackedVector3Array(-0.000, -0.000, -0.000, 0.000, 0.000, 0.000, 148.624, 0.000, -12.280, 0.215, -0.103, 1.316, -0.215, 0.103, -1.316, 148.034, 0.300, -16.236, 0.252, -0.107, 1.309, -0.252, 0.107, -1.309, 147.332, 0.620, -20.174, 0.290, -0.107, 1.301, -0.290, 0.107, -1.301, 146.519, 0.940, -24.090, 0.327, -0.107, 1.292, -0.327, 0.107, -1.292, 145.594, 1.260, -27.981, 0.364, -0.107, 1.282, -0.364, 0.107, -1.282, 144.558, 1.580, -31.845, 0.402, -0.107, 1.271, -0.402, 0.107, -1.271, 143.409, 1.900, -35.676, 0.442, -0.107, 1.258, -0.442, 0.107, -1.258, 142.144, 2.220, -39.471, 0.485, -0.107, 1.242, -0.485, 0.107, -1.242, 140.758, 2.540, -43.223, 0.534, -0.107, 1.221, -0.534, 0.107, -1.221, 139.236, 2.860, -46.922, 0.598, -0.107, 1.191, -0.598, 0.107, -1.191, 137.552, 3.180, -50.549, 0.688, -0.107, 1.140, -0.688, 0.107, -1.140, 135.650, 3.500, -54.067, 0.790, -0.293, 1.072, -0.790, 0.293, -1.072, 133.425, 3.820, -57.388, 0.852, -0.507, 1.025, -0.852, 0.507, -1.025, 130.912, 5.260, -60.500, 0.881, -0.533, 1.001, -0.881, 0.533, -1.001, 128.312, 6.860, -63.540, 0.909, -0.533, 0.975, -0.909, 0.533, -0.975, 125.627, 8.460, -66.505, 0.937, -0.533, 0.949, -0.937, 0.533, -0.949, 122.858, 10.060, -69.391, 0.964, -0.533, 0.921, -0.964, 0.533, -0.921, 120.007, 11.660, -72.197, 0.990, -0.533, 0.893, -0.990, 0.533, -0.893, 117.075, 13.260, -74.918, 1.016, -0.533, 0.863, -1.016, 0.533, -0.863, 114.065, 14.860, -77.552, 1.041, -0.533, 0.833, -1.041, 0.533, -0.833, 110.979, 16.460, -80.096, 1.066, -0.533, 0.801, -1.066, 0.533, -0.801, 107.818, 18.060, -82.548, 1.089, -0.533, 0.769, -1.089, 0.533, -0.769, 104.586, 19.660, -84.903, 1.112, -0.533, 0.736, -1.112, 0.533, -0.736, 101.284, 21.260, -87.161, 1.134, -0.533, 0.701, -1.134, 0.533, -0.701, 97.915, 22.860, -89.317, 1.155, -0.533, 0.666, -1.155, 0.533, -0.666, 94.481, 24.460, -91.369, 1.175, -0.533, 0.630, -1.175, 0.533, -0.630, 90.986, 26.060, -93.314, 1.194, -0.533, 0.593, -1.194, 0.533, -0.593, 87.433, 27.660, -95.150, 1.212, -0.533, 0.555, -1.212, 0.533, -0.555, 83.823, 29.260, -96.873, 1.229, -0.533, 0.517, -1.229, 0.533, -0.517, 80.161, 30.860, -98.482, 1.245, -0.533, 0.477, -1.245, 0.533, -0.477, 76.450, 32.460, -99.974, 1.259, -0.533, 0.437, -1.259, 0.533, -0.437, 72.693, 34.060, -101.346, 1.273, -0.533, 0.396, -1.273, 0.533, -0.396, 68.894, 35.660, -102.597, 1.285, -0.533, 0.354, -1.285, 0.533, -0.354, 65.056, 37.260, -103.723, 1.296, -0.533, 0.312, -1.296, 0.533, -0.312, 61.183, 38.860, -104.723, 1.306, -0.533, 0.269, -1.306, 0.533, -0.269, 57.279, 40.460, -105.595, 1.314, -0.533, 0.225, -1.314, 0.533, -0.225, 53.348, 42.060, -106.336, 1.321, -0.533, 0.181, -1.321, 0.533, -0.181, 49.395, 43.660, -106.944, 1.326, -0.533, 0.136, -1.326, 0.533, -0.136, 45.424, 45.260, -107.419, 1.330, -0.533, 0.090, -1.330, 0.533, -0.090, 41.438, 46.860, -107.757, 1.332, -0.533, 0.044, -1.332, 0.533, -0.044, 37.443, 48.460, -107.959, 1.333, -0.533, -0.002, -1.333, 0.533, 0.002, 33.444, 50.060, -108.021, 1.332, -0.533, -0.049, -1.332, 0.533, 0.049, 29.445, 51.660, -107.944, 1.330, -0.533, -0.097, -1.330, 0.533, 0.097, 25.451, 53.260, -107.725, 1.325, -0.533, -0.144, -1.325, 0.533, 0.144, 21.468, 54.860, -107.364, 1.319, -0.533, -0.192, -1.319, 0.533, 0.192, 17.500, 56.460, -106.860, 1.311, -0.533, -0.241, -1.311, 0.533, 0.241, 13.553, 58.060, -106.211, 1.302, -0.533, -0.286, -1.302, 0.533, 0.286, 9.633, 59.660, -105.417, 1.297, -0.533, -0.310, -1.297, 0.533, 0.310, 5.741, 61.260, -104.494, 1.296, -0.533, -0.313, -1.296, 0.533, 0.313, 1.853, 62.860, -103.554, 1.296, -0.533, -0.312, -1.296, 0.533, 0.312, -2.036, 64.460, -102.615, 1.295, -0.533, -0.317, -1.295, 0.533, 0.317, -5.925, 66.060, -101.680, 1.288, -0.533, -0.345, -1.288, 0.533, 0.345, -9.806, 67.660, -100.715, 1.274, -0.533, -0.393, -1.274, 0.533, 0.393, -13.651, 69.260, -99.611, 1.257, -0.533, -0.442, -1.257, 0.533, 0.442, -17.449, 70.860, -98.358, 1.239, -0.533, -0.492, -1.239, 0.533, 0.492, -21.195, 72.460, -96.956, 1.218, -0.533, -0.541, -1.218, 0.533, 0.541, -24.883, 74.060, -95.407, 1.196, -0.533, -0.589, -1.196, 0.533, 0.589, -28.506, 75.660, -93.712, 1.171, -0.533, -0.637, -1.171, 0.533, 0.637, -32.057, 77.260, -91.872, 1.144, -0.533, -0.684, -1.144, 0.533, 0.684, -35.531, 78.860, -89.890, 1.115, -0.533, -0.730, -1.115, 0.533, 0.730, -38.921, 80.460, -87.768, 1.085, -0.533, -0.774, -1.085, 0.533, 0.774, -42.223, 82.060, -85.510, 1.055, -0.533, -0.815, -1.055, 0.533, 0.815, -45.433, 83.660, -83.124, 1.026, -0.533, -0.852, -1.026, 0.533, 0.852, -48.552, 85.260, -80.619, 1.002, -0.533, -0.879, -1.002, 0.533, 0.879, -51.587, 86.860, -78.014, 0.992, -0.533, -0.891, -0.992, 0.533, 0.891, -54.564, 88.460, -75.343, 1.010, -0.533, -0.870, -1.010, 0.533, 0.870, -57.539, 90.060, -72.668, 1.035, -0.533, -0.840, -1.035, 0.533, 0.840, -60.624, 91.660, -70.124, 1.022, -0.533, -0.855, -1.022, 0.533, 0.855, -63.749, 93.260, -67.628, 0.982, -0.533, -0.901, -0.982, 0.533, 0.901, -66.758, 94.860, -64.993, 0.940, -0.533, -0.945, -0.940, 0.533, 0.945, -69.643, 96.460, -62.223, 0.896, -0.533, -0.986, -0.896, 0.533, 0.986, -72.400, 98.060, -59.325, 0.851, -0.533, -1.026, -0.851, 0.533, 1.026, -75.022, 99.660, -56.305, 0.803, -0.533, -1.064, -0.803, 0.533, 1.064, -77.504, 101.260, -53.169, 0.754, -0.533, -1.099, -0.754, 0.533, 1.099, -79.841, 102.860, -49.923, 0.703, -0.533, -1.132, -0.703, 0.533, 1.132, -82.028, 104.460, -46.574, 0.651, -0.533, -1.163, -0.651, 0.533, 1.163, -84.060, 106.060, -43.129, 0.597, -0.533, -1.192, -0.597, 0.533, 1.192, -85.933, 107.660, -39.595, 0.542, -0.533, -1.218, -0.542, 0.533, 1.218, -87.644, 109.260, -35.979, 0.486, -0.533, -1.241, -0.486, 0.533, 1.241, -89.188, 110.860, -32.290, 0.441, -0.533, -1.258, -0.441, 0.533, 1.258, -90.562, 112.460, -28.534, 0.455, -0.353, -1.249, -0.455, 0.353, 1.249, -91.835, 114.060, -24.743, 0.186, -0.113, -1.275, -0.186, 0.113, 1.275, -93.292, 114.580, -21.040, -0.422, -0.053, -1.207, 0.422, 0.053, 1.207, -92.951, 114.740, -17.095, -0.949, -0.053, -0.857, 0.949, 0.053, 0.857, -90.760, 114.900, -13.797, -1.244, -0.053, -0.297, 1.244, 0.053, 0.297, -87.257, 115.060, -11.953, -1.234, -0.053, 0.335, 1.234, 0.053, -0.335, -83.298, 115.220, -12.014, -0.938, -0.143, 0.879, 0.938, 0.143, -0.879, -79.853, 115.380, -13.966, -0.686, -0.383, 1.137, 0.686, 0.383, -1.137, -77.671, 116.080, -17.288, -0.675, -0.533, 1.149, 0.675, 0.533, -1.149, -75.737, 117.680, -20.789, -0.735, -0.533, 1.112, 0.735, 0.533, -1.112, -73.619, 119.280, -24.182, -0.792, -0.533, 1.072, 0.792, 0.533, -1.072, -71.325, 120.880, -27.458, -0.843, -0.533, 1.032, 0.843, 0.533, -1.032, -68.868, 122.480, -30.614, -0.885, -0.533, 0.997, 0.885, 0.533, -0.997, -66.268, 124.080, -33.653, -0.910, -0.533, 0.974, 0.910, 0.533, -0.974, -63.558, 125.680, -36.596, -0.904, -0.533, 0.980, 0.904, 0.533, -0.980, -60.805, 127.280, -39.497, -0.891, -0.533, 0.992, 0.891, 0.533, -0.992, -58.134, 128.880, -42.474, -0.920, -0.533, 0.964, 0.920, 0.533, -0.964, -55.461, 130.480, -45.449, -0.977, -0.533, 0.906, 0.977, 0.533, -0.906, -52.613, 132.080, -48.257, -1.030, -0.533, 0.846, 1.030, 0.533, -0.846, -49.600, 133.680, -50.887, -1.079, -0.533, 0.782, 1.079, 0.533, -0.782, -46.433, 135.280, -53.330, -1.125, -0.533, 0.715, 1.125, 0.533, -0.715, -43.124, 136.880, -55.576, -1.166, -0.533, 0.645, 1.166, 0.533, -0.645, -39.686, 138.480, -57.619, -1.203, -0.533, 0.574, 1.203, 0.533, -0.574, -36.130, 140.080, -59.449, -1.235, -0.533, 0.500, 1.235, 0.533, -0.500, -32.469, 141.680, -61.060, -1.263, -0.533, 0.424, 1.263, 0.533, -0.424, -28.718, 143.280, -62.447, -1.287, -0.533, 0.347, 1.287, 0.533, -0.347, -24.890, 144.880, -63.604, -1.305, -0.533, 0.268, 1.305, 0.533, -0.268, -20.998, 146.480, -64.526, -1.319, -0.533, 0.188, 1.319, 0.533, -0.188, -17.058, 148.080, -65.211, -1.325, -0.533, 0.141, 1.325, 0.533, -0.141, -13.083, 149.680, -65.656, -1.320, -0.323, 0.140, 1.320, 0.323, -0.140, -9.108, 151.280, -66.055, -1.271, -0.083, -0.169, 1.271, 0.083, 0.169, -5.164, 151.620, -66.496, -1.036, -0.053, -0.749, 1.036, 0.053, 0.749, -1.481, 151.780, -65.043, -0.550, -0.053, -1.154, 0.550, 0.053, 1.154, 1.054, 151.940, -62.002, 0.070, -0.053, -1.277, -0.070, 0.053, 1.277, 1.821, 152.100, -58.118, 0.674, -0.053, -1.087, -0.674, 0.053, 1.087, 0.632, 152.260, -54.341, 1.107, -0.173, -0.661, -1.107, 0.173, 0.661, -2.222, 152.420, -51.597, 1.277, -0.413, -0.369, -1.277, 0.413, 0.369, -6.012, 153.300, -50.373, 1.277, -0.533, -0.378, -1.277, 0.533, 0.378, -9.886, 154.900, -49.381, 1.244, -0.533, -0.476, -1.244, 0.533, 0.476, -13.676, 156.500, -48.104, 1.201, -0.533, -0.575, -1.201, 0.533, 0.575, -17.350, 158.100, -46.526, 1.150, -0.533, -0.672, -1.150, 0.533, 0.672, -20.884, 159.700, -44.655, 1.089, -0.533, -0.766, -1.089, 0.533, 0.766, -24.250, 161.300, -42.495, 1.019, -0.533, -0.857, -1.019, 0.533, 0.857, -27.419, 162.900, -40.057, 0.940, -0.533, -0.943, -0.940, 0.533, 0.943, -30.365, 164.500, -37.353, 0.852, -0.533, -1.023, -0.852, 0.533, 1.023, -33.060, 166.100, -34.399, 0.754, -0.533, -1.097, -0.754, 0.533, 1.097, -35.476, 167.700, -31.212, 0.648, -0.533, -1.163, -0.648, 0.533, 1.163, -37.586, 169.300, -27.816, 0.534, -0.533, -1.220, -0.534, 0.533, 1.220, -39.366, 170.900, -24.235, 0.412, -0.533, -1.266, -0.412, 0.533, 1.266, -40.789, 172.500, -20.499, 0.282, -0.533, -1.301, -0.282, 0.533, 1.301, -41.835, 174.100, -16.640, 0.147, -0.533, -1.323, -0.147, 0.533, 1.323, -42.484, 175.700, -12.695, 0.007, -0.533, -1.331, -0.007, 0.533, 1.331, -42.719, 177.300, -8.703, -0.136, -0.533, -1.324, 0.136, 0.533, 1.324, -42.528, 178.900, -4.710, -0.280, -0.533, -1.301, 0.280, 0.533, 1.301, -41.905, 180.500, -0.761, -0.422, -0.533, -1.262, 0.422, 0.533, 1.262, -40.850, 182.100, 3.096, -0.557, -0.533, -1.208, 0.557, 0.533, 1.208, -39.376, 183.700, 6.812, -0.681, -0.533, -1.144, 0.681, 0.533, 1.144, -37.506, 185.300, 10.346, -0.783, -0.533, -1.077, 0.783, 0.533, 1.077, -35.290, 186.900, 13.674, -0.843, -0.533, -1.032, 0.843, 0.533, 1.032, -32.808, 188.500, 16.810, -0.727, -0.533, -1.103, 0.727, 0.533, 1.103, -30.230, 190.100, 19.868, -0.416, -0.533, -1.249, 0.416, 0.533, 1.249, -28.446, 191.700, 23.427, -0.254, -0.533, -1.308, 0.254, 0.533, 1.308, -27.736, 193.300, 27.359, -0.321, -0.533, -1.293, 0.321, 0.533, 1.293, -26.924, 194.900, 31.274, -0.417, -0.533, -1.265, 0.417, 0.533, 1.265, -25.809, 196.500, 35.115, -0.504, -0.533, -1.233, 0.504, 0.533, 1.233, -24.421, 198.100, 38.866, -0.659, -0.533, -1.148, 0.659, 0.533, 1.148, -22.783, 199.700, 42.514, -0.927, -0.533, -0.924, 0.927, 0.533, 0.924, -20.467, 201.300, 45.753, -1.179, -0.533, -0.569, 1.179, 0.533, 0.569, -17.219, 202.900, 48.056, -1.300, -0.533, -0.152, 1.300, 0.533, 0.152, -13.396, 204.500, 49.169, -1.278, -0.533, 0.281, 1.278, 0.533, -0.281, -9.419, 206.100, 48.970, -1.116, -0.533, 0.684, 1.116, 0.533, -0.684, -5.726, 207.700, 47.481, -0.831, -0.533, 1.012, 0.831, 0.533, -1.012, -2.724, 209.300, 44.866, -0.454, -0.533, 1.228, 0.454, 0.533, -1.228, -0.742, 210.900, 41.412, -0.124, -0.467, 1.319, 0.124, 0.467, -1.319, 0.000, 212.500, 37.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 213.700, 33.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 214.900, 29.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 216.100, 25.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 217.300, 21.500, -0.000, -0.400, 1.333, 0.000, 0.400, -1.333, 0.000, 218.500, 17.500, -0.000, -0.250, 1.333, 0.000, 0.250, -1.333, 0.000, 219.700, 13.500, -0.000, -0.050, 1.333, 0.000, 0.050, -1.333, 0.000, 220.000, 9.500, -0.000, -0.000, 1.333, 0.000, 0.000, -1.333, 0.000, 220.000, 5.500, -0.000, -0.000, 0.917, 0.000, 0.000, -0.917, 0.000, 220.000, 1.500, -0.000, -0.000, -0.000, 0.000, 0.000, 0.000, 0.000, 220.000, 0.000),
++"tilts": PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
++}
++point_count = 165
+ 
+ [node name="HeavensCall" type="Node3D"]
+ script = ExtResource("1")
+ 
+ [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+ environment = SubResource("Environment_1")
+ 
+ [node name="Sun" type="DirectionalLight3D" parent="."]
+ transform = Transform3D(-0.7071, -0.2418, 0.6645, 0, 0.9397, 0.342, -0.7071, 0.2418, -0.6645, 0, 0, 0)
+ light_color = Color(1, 0.88, 0.74, 1)
+ light_energy = 1.6
+ shadow_enabled = true
+ directional_shadow_max_distance = 140.0
+ 
+ [node name="Wind" type="Node" parent="."]
+ script = ExtResource("4")
+ 
+-[node name="Ground" type="StaticBody3D" parent="."]
+-collision_layer = 3
+-
+-[node name="Mesh" type="MeshInstance3D" parent="Ground"]
+-mesh = SubResource("ground_mesh")
+-surface_material_override/0 = ExtResource("6")
+-
+-[node name="Shape" type="CollisionShape3D" parent="Ground"]
+-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.5, 0)
+-shape = SubResource("ground_shape")
++[node name="Trail" type="Path3D" parent="."]
++curve = SubResource("trail_curve")
++script = ExtResource("6")
++
++[node name="MountainTerrain" type="Node3D" parent="." node_paths=PackedStringArray("trail")]
++script = ExtResource("7")
++trail = NodePath("../Trail")
++narrows = PackedVector2Array(0.18, 4.0, 0.4, 3.5, 0.82, 4.0)
+ 
+ [node name="Player" parent="." instance=ExtResource("2")]
+ walk_speed = 2.0
+ can_sprint = false
+ lantern = false
+ 
+ [node name="GameplayCamera" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
+ current = true
+ fov = 60.0
+ far = 600.0
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_trail.gd tests/test_heavens_trail.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_trail.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_heavens_trail.gd	2026-11-08 15:57:51.853289800 +0800
+@@ -0,0 +1,44 @@
++extends "res://tests/case.gd"
++## Heavens call trail and mountain: length, grade, ground under the trail, progress and fall respawn.
++
++const SCENE := "res://scenes/levels/heavens_call.tscn"
++
++
++func test_trail_length_and_walk_time(lv) -> void:
++	var l: float = lv.trail.length()
++	check(l >= 650.0 and l <= 750.0, "trail 650-750 m, got %.0f" % l)
++	var t: float = l / lv.player.walk_speed
++	check(t >= 300.0 and t <= 420.0, "walk time 5-7 min, got %.0f s" % t)
++
++
++func test_trail_grade_walkable(lv) -> void:
++	var worst := 0.0
++	for i in 400:
++		var a: Vector3 = lv.trail.point_at(i / 400.0)
++		var b: Vector3 = lv.trail.point_at((i + 1) / 400.0)
++		var run := Vector2(b.x - a.x, b.z - a.z).length()
++		worst = maxf(worst, rad_to_deg(atan2(absf(b.y - a.y), run)))
++	check(worst <= 30.0, "steepest trail grade <= 30 deg, got %.1f" % worst)
++
++
++func test_terrain_matches_trail(lv) -> void:
++	await frames(2)
++	for i in 50:
++		var p: Vector3 = lv.trail.point_at(i / 50.0)
++		var q := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 20, p + Vector3.DOWN * 20, 2)
++		var hit: Dictionary = lv.get_world_3d().direct_space_state.intersect_ray(q)
++		check(not hit.is_empty() and absf(hit.position.y - p.y) < 0.6, "ground on layer 2 under the trail at %d" % i)
++
++
++func test_progress_is_monotonic_along_trail(lv) -> void:
++	check_near(lv.trail.progress_at(lv.trail.point_at(0.0)), 0.0, 0.01, "foot = 0")
++	check_near(lv.trail.progress_at(lv.trail.point_at(0.5)), 0.5, 0.01, "middle = 0.5")
++	check_near(lv.trail.progress_at(lv.trail.point_at(1.0)), 1.0, 0.01, "summit = 1")
++
++
++func test_fall_respawns_on_trail(lv) -> void:
++	lv.furthest_progress = 0.4
++	lv.player.global_position = lv.trail.point_at(0.4) + Vector3(0, -40, 0)
++	await frames(3)
++	check(lv.player.global_position.distance_to(lv.trail.point_at(0.4)) < 2.5, "put back at furthest point")
++	check_near(lv.furthest_progress, 0.4, 0.001, "progress not reset by the fall")
+# new/changed binary or audio files:

@@ -1,0 +1,1355 @@
+# HC Task 6 review package (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/environment/grass_field.gd scripts/environment/grass_field.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/environment/grass_field.gd	2026-11-08 17:05:54.660381400 +0800
++++ scripts/environment/grass_field.gd	2026-11-08 17:15:02.953941700 +0800
+@@ -14,22 +14,20 @@
+ ## with no ground hit get no blade.
+ ##
+ ## Chunk nodes are internal (no owner) and not saved with the scene. Runs in the editor too.
+ 
+ signal rebuilt(blade_count: int)
+ 
+ enum PaintMode { DENSITY, HEIGHT, ERASE }
+ 
+ const CHUNK_SIZE := 16.0
+ const SHADER := preload("res://assets/shaders/grass.gdshader")
+-const RAY_TOP := 40.0
+-const RAY_BOTTOM := -5.0
+ const HEIGHT_JITTER := 0.15
+ const MAX_LEAN_DEG := 10.0
+ 
+ @export var extent := Vector2(74, 104):
+ 	set(v):
+ 		if v != extent:
+ 			extent = v
+ 			_invalidate_ground()
+ 			mark_dirty()
+ ## Metres per mask texel.
+@@ -65,20 +63,35 @@
+ 		if v != random_seed:
+ 			random_seed = v
+ 			mark_dirty()
+ ## Physics layer (1-based) the ground ray hits. Walkable ground is on layer 2 ("ground").
+ @export_range(1, 32) var ground_layer := 2:
+ 	set(v):
+ 		if v != ground_layer:
+ 			ground_layer = v
+ 			_invalidate_ground()
+ 			mark_dirty()
++## The ground ray starts this far above the field's own height (its node y)...
++@export var ray_above := 40.0:
++	set(v):
++		if not is_equal_approx(v, ray_above):
++			ray_above = v
++			_invalidate_ground()
++			mark_dirty()
++## ...and ends this far below it. Widen both for a field over steep or high ground (a mountain
++## trail); the first ground-layer hit from the top wins.
++@export var ray_below := 5.0:
++	set(v):
++		if not is_equal_approx(v, ray_below):
++			ray_below = v
++			_invalidate_ground()
++			mark_dirty()
+ 
+ @export_group("Look")
+ @export var base_color := Color(0.12, 0.14, 0.10):
+ 	set(v):
+ 		base_color = v
+ 		_update_material()
+ @export var tip_color := Color(0.30, 0.31, 0.19):
+ 	set(v):
+ 		tip_color = v
+ 		_update_material()
+@@ -442,33 +455,34 @@
+ # --- ground cache ------------------------------------------------------------------------
+ 
+ func _invalidate_ground() -> void:
+ 	_ground_valid = false
+ 
+ 
+ func _ground_is_valid() -> bool:
+ 	return _ground_valid and _ground_size == mask_size() and _ground_origin.is_equal_approx(global_position)
+ 
+ 
+-## One downward ray per texel centre against `ground_layer`.
++## One downward ray per texel centre against `ground_layer`, from ray_above over the field's
++## height down to ray_below under it.
+ func _cache_ground() -> void:
+ 	var size := mask_size()
+ 	_ground.resize(size.x * size.y)
+ 	_ground.fill(NAN)
+ 	_ground_size = size
+ 	_ground_origin = global_position
+ 	_ground_valid = true
+ 	var space := get_world_3d().direct_space_state if is_inside_tree() else null
+ 	if space == null:
+ 		_ground_valid = false
+ 		return
+ 	var corner := _corner()
+ 	var query := PhysicsRayQueryParameters3D.new()
+ 	query.collision_mask = 1 << (ground_layer - 1)
+ 	for y in size.y:
+ 		for x in size.x:
+ 			var p := corner + (Vector2(x, y) + Vector2(0.5, 0.5)) * texel_size
+-			query.from = Vector3(p.x, RAY_TOP, p.y)
+-			query.to = Vector3(p.x, RAY_BOTTOM, p.y)
++			query.from = Vector3(p.x, _ground_origin.y + ray_above, p.y)
++			query.to = Vector3(p.x, _ground_origin.y - ray_below, p.y)
+ 			var hit := space.intersect_ray(query)
+ 			if hit:
+ 				_ground[y * size.x + x] = hit.position.y
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd	2026-11-08 17:05:54.683432200 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 17:17:32.633707700 +0800
+@@ -12,20 +12,21 @@
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var wind: Wind = $Wind
+ @onready var trail: Trail = $Trail
+ @onready var terrain: MountainTerrain = $MountainTerrain
+ @onready var mood: MoodDirector = $MoodDirector
+ @onready var storm: Storm = $Storm
+ @onready var mist: FogVolume = $Mist
+ @onready var soundscape: Soundscape = $Soundscape
++@onready var vista: Vista = $Vista
+ @onready var _fade: ColorRect = $UI/Fade
+ 
+ ## Furthest progress (0 = foot, 1 = summit) she has reached along the trail. It only ever
+ ## increases, so walking back down or falling never undoes the mood.
+ var furthest_progress := 0.0
+ 
+ ## Footsteps made since the last reset.
+ var step_count := 0
+ 
+ var _fade_tween: Tween
+@@ -49,28 +50,29 @@
+ 	var pos := player.global_position
+ 	_count_stride(pos - _last_pos, player.is_on_floor())
+ 	_last_pos = pos
+ 	var progress := trail.progress_at(pos)
+ 	furthest_progress = maxf(furthest_progress, progress)
+ 	if pos.y < trail.point_at(progress).y - FALL_DEPTH:
+ 		respawn()
+ 
+ 
+ ## Puts the girl back at the trail start facing up the trail, restarts the fade-in from black,
+-## and resets the progress, the mood and the storm (later tasks extend this).
++## and resets the progress, the mood, the storm and the vista (closed: reveal 0).
+ func reset_scene() -> void:
+ 	furthest_progress = 0.0
+ 	_thunder_gen += 1
+ 	_thunder_pending = 0
+ 	_stride_walked = 0.0
+ 	step_count = 0
+ 	storm.reset()
++	vista.reveal = 0.0
+ 	mood.apply(MoodDirector.sample(0.0))
+ 	_place_on_trail(0.0)
+ 	_last_pos = player.global_position
+ 	_restart_fade()
+ 
+ 
+ ## Thunder rolls still waiting for their flash's delay.
+ func pending_thunder() -> int:
+ 	return _thunder_pending
+ 
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/mood_director.gd scripts/levels/mood_director.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/mood_director.gd	2026-11-08 17:05:54.683432200 +0800
++++ scripts/levels/mood_director.gd	2026-11-08 17:21:45.937838900 +0800
+@@ -84,20 +84,25 @@
+ @export var wind: Wind
+ @export var sun: DirectionalLight3D
+ @export var world_environment: WorldEnvironment
+ ## A FogVolume with the ground_mist shader; it is kept centred on `follow`.
+ @export var mist: FogVolume
+ @export var storm: Storm
+ ## Who the mist follows (the girl).
+ @export var follow: Node3D
+ ## The Soundscape (Task 4). Optional: without it the mood is silent.
+ @export var soundscape: Node
++## The summit Vista (Task 6). Optional. Its `reveal` opens the view on top of the mood: the fog
++## is scaled by vista.fog_scale() and the ground mist by vista.mist_scale() (both 1 at reveal 0),
++## and its sky colours by vista.horizon_tint()/zenith_tint() (identity at reveal 0), so the mood
++## keeps driving everything and `current` stays the mood's own values.
++@export var vista: Vista
+ 
+ ## The mood applied last.
+ var current: Dictionary = {}
+ 
+ var _time := 0.0
+ var _mist_offset := Vector3.ZERO
+ var _base_direction := 0.0
+ 
+ 
+ func _ready() -> void:
+@@ -146,35 +151,39 @@
+ ## Drives every system from `mood` (a `sample()` result) and remembers it as `current`.
+ func apply(mood: Dictionary) -> void:
+ 	current = mood
+ 	if wind:
+ 		wind.strength = mood.wind
+ 		var swing := sin(_time * TAU / SWING_PERIOD)
+ 		wind.direction_degrees = fposmod(_base_direction + mood.wind_swing_deg * swing, 360.0)
+ 	if sun:
+ 		sun.light_energy = mood.sun_energy
+ 		sun.light_color = mood.sun_color
++	var open_fog := vista.fog_scale() if vista else 1.0
++	var open_mist := vista.mist_scale() if vista else 1.0
++	var sky_color: Color = vista.horizon_tint(mood.sky_color) if vista else mood.sky_color
++	var zenith_color: Color = vista.zenith_tint(mood.zenith_color) if vista else mood.zenith_color
+ 	var env: Environment = world_environment.environment if world_environment else null
+ 	var sky: ShaderMaterial = null
+ 	if env:
+-		env.fog_density = mood.fog_density
+-		env.volumetric_fog_density = mood.fog_density * VOLUMETRIC_RATIO
+-		env.fog_light_color = mood.sky_color
+-		env.background_color = mood.sky_color
+-		env.ambient_light_color = mood.sky_color
++		env.fog_density = mood.fog_density * open_fog
++		env.volumetric_fog_density = env.fog_density * VOLUMETRIC_RATIO
++		env.fog_light_color = sky_color
++		env.background_color = sky_color
++		env.ambient_light_color = sky_color
+ 		env.ambient_light_energy = mood.ambient
+ 		if env.sky and env.sky.sky_material is ShaderMaterial:
+ 			sky = env.sky.sky_material
+-			sky.set_shader_parameter("horizon_color", mood.sky_color)
+-			sky.set_shader_parameter("zenith_color", mood.zenith_color)
++			sky.set_shader_parameter("horizon_color", sky_color)
++			sky.set_shader_parameter("zenith_color", zenith_color)
+ 	if mist:
+-		mist.material.set_shader_parameter("density", mood.mist)
++		mist.material.set_shader_parameter("density", mood.mist * open_mist)
+ 	if storm:
+ 		storm.rate_per_min = mood.lightning_per_min
+ 		storm.light(sun, env, sky)
+ 	if soundscape and soundscape.has_method("set_volumes"):
+ 		soundscape.set_volumes(mood.vol_wind, mood.vol_wind_strong, mood.vol_eerie)
+ 
+ 
+ static func _mix(a: Variant, b: Variant, t: float) -> Variant:
+ 	if a is Color:
+ 		return (a as Color).lerp(b, t)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/vista.gd scripts/levels/vista.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/vista.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/levels/vista.gd	2026-11-08 17:24:36.473666700 +0800
+@@ -0,0 +1,419 @@
++@tool
++class_name Vista
++extends Node3D
++## The Heavens call summit vista: the world the fog opens on. Everything far is generated (one
++## faceted mesh per piece, internal children with no owner, so the scene file stays small); the
++## ovoos are authored children under `Ovoos`.
++##
++## - Steppe: a golden ground disc of `steppe_radius` at `steppe_y`, flat under the massif (it
++##   buries the square terrain's outer edge and skirt) and rolling further out. It dips under the
++##   lowest stretch of the trail so the foot is never under it.
++## - Ridges: three rings of low-poly ridges at `ring_radii`, darker and bluer with distance. They
++##   part toward -Z (the way she looks from the summit), so the steppe runs on into the mist
++##   there, with the mountains rising either side.
++## - Mist sea: MIST_LAYERS flat slabs of mist (assets/shaders/mist_sea.gdshader) between the
++##   steppe and the summit. A thin veil looking down, a solid sea toward the horizon, so the
++##   steppe's edge and the valleys vanish under it.
++## - Cloud deck: one more slab of the same shader high overhead, dark slate, for a stormy sky.
++##
++## `reveal` (0..1, driven by the summit sequence) opens the view: MoodDirector multiplies its fog
++## by fog_scale() and its ground mist by mist_scale(), tints its sky with horizon_tint() and
++## zenith_tint(), and the mist sea thins. At 0 the far world
++## isn't drawn at all (it can't show through the fog on the climb) and the mood is untouched.
++## No collision, and no shadows: the far pieces neither cast nor need them.
++
++## Mood fog left at reveal 1 (a fraction). Opened geometrically, pow(OPEN_FOG, reveal), so the
++## seen distance grows steadily rather than all at the end.
++const OPEN_FOG := 0.08
++## Ground mist (the Mist FogVolume around her) left at reveal 1.
++const OPEN_MIST := 0.12
++## Sky at full reveal (blended in by OPEN_TINT): the horizon cools to a blue-grey distance haze,
++## so the ridges fade bluer, and the zenith darkens toward storm.
++const OPEN_HORIZON := Color(0.56, 0.6, 0.67)
++const OPEN_ZENITH := Color(0.19, 0.22, 0.29)
++const OPEN_TINT := 0.6
++## Radius of the mist sea, past the steppe's edge; the camera must see this far.
++const MIST_RADIUS := 4500.0
++## Heights of the mist layers above the steppe, and their optical depth closed / open.
++const MIST_LAYERS := [
++	{"above": 30.0, "closed": 1.2, "open": 0.2},
++	{"above": 75.0, "closed": 0.9, "open": 0.09},
++]
++## Mist drift, noise-space units per second per unit of wind.
++const MIST_DRIFT := 0.004
++## The cloud deck: height above the steppe, optical depth, noise scale, colour (stormy slate),
++## drift relative to the mist.
++const CLOUD := {"above": 1200.0, "thickness": 0.4, "noise_scale": 0.0004, "color": Color(0.27, 0.29, 0.34), "drift": 3.0}
++## Rolling noise on the steppe, in metres, reached beyond ROLL_FROM.y metres from the centre.
++const ROLL := 28.0
++const ROLL_FROM := Vector2(260.0, 1200.0)
++## The steppe stays this far under the trail, flat within FOOT_FLAT metres of it and rising at
++## FOOT_SLOPE beyond.
++const FOOT_CLEAR := 3.0
++const FOOT_FLAT := 15.0
++const FOOT_SLOPE := 0.25
++## Ridge rings: crest height range above the steppe, the gap toward -Z (angle where it starts to
++## close, angle where it is fully closed, crest height left in it) and the colour.
++const RINGS := [
++	{"segments": 160, "low": 40.0, "high": 210.0, "gap": Vector3(0.45, 1.15, 10.0), "color": Color(0.22, 0.23, 0.23)},
++	{"segments": 200, "low": 120.0, "high": 430.0, "gap": Vector3(0.3, 0.8, 20.0), "color": Color(0.17, 0.2, 0.26)},
++	{"segments": 240, "low": 250.0, "high": 800.0, "gap": Vector3(0.12, 0.5, 60.0), "color": Color(0.13, 0.17, 0.25)},
++]
++## Profile across a ridge (fraction of the depth, fraction of the crest height).
++const PROFILE := [Vector2(0.0, 0.0), Vector2(0.2, 0.32), Vector2(0.38, 0.72), Vector2(0.5, 1.0),
++	Vector2(0.63, 0.68), Vector2(0.8, 0.3), Vector2(1.0, 0.0)]
++
++## 0 = hidden behind the mood's fog, 1 = fully open.
++@export_range(0.0, 1.0) var reveal := 0.0:
++	set(value):
++		reveal = clampf(value, 0.0, 1.0)
++		_apply_reveal()
++@export var steppe_y := 3.0:
++	set(value):
++		steppe_y = value
++		_queue_rebuild()
++@export var steppe_radius := 3000.0:
++	set(value):
++		steppe_radius = value
++		_queue_rebuild()
++## Radii of the three ridge rings (their crests), metres from this node.
++@export var ring_radii := PackedFloat32Array([760.0, 1400.0, 2250.0]):
++	set(value):
++		ring_radii = value
++		_queue_rebuild()
++@export var seed := 11:
++	set(value):
++		seed = value
++		_queue_rebuild()
++@export var steppe_color := Color(0.72, 0.56, 0.26)
++## The trail, so the steppe can dip under its foot.
++@export var trail: Trail:
++	set(value):
++		trail = value
++		_queue_rebuild()
++## Optional: the mist sea takes its horizon colour from this environment's fog.
++@export var world_environment: WorldEnvironment
++## Optional: the mist sea drifts with this wind.
++@export var wind: Wind
++
++## Parent of everything generated far away; hidden while reveal is 0.
++var far: Node3D
++
++var _roll: FastNoiseLite
++var _patch: FastNoiseLite
++var _foot := PackedVector3Array()  # trail points low enough to need the dip
++var _mist: Array[ShaderMaterial] = []
++var _mist_offset := Vector2.ZERO
++var _cloud: ShaderMaterial
++var _rebuild_queued := false
++var _noise_ready := false
++
++
++func _ready() -> void:
++	rebuild()
++
++
++func _process(delta: float) -> void:
++	if far == null or not far.visible:
++		return
++	if wind:
++		_mist_offset -= wind.vector() * wind.strength * MIST_DRIFT * delta
++	var horizon := Color(0.5, 0.5, 0.52)
++	if world_environment and world_environment.environment:
++		horizon = world_environment.environment.fog_light_color
++	for m in _mist:
++		m.set_shader_parameter("offset", _mist_offset)
++		m.set_shader_parameter("horizon_color", horizon)
++		m.set_shader_parameter("color", horizon.lerp(Color(0.88, 0.9, 0.93), 0.6))
++	if _cloud:
++		_cloud.set_shader_parameter("offset", _mist_offset * CLOUD.drift)
++		_cloud.set_shader_parameter("horizon_color", horizon)
++		_cloud.set_shader_parameter("color", CLOUD.color)
++
++
++## How much of the mood's fog is left (1 = all of it at reveal 0).
++func fog_scale() -> float:
++	return pow(OPEN_FOG, reveal)
++
++
++## How much of the mood's ground mist is left.
++func mist_scale() -> float:
++	return lerpf(1.0, OPEN_MIST, reveal)
++
++
++## The mood's horizon (fog, background) colour as the reveal leaves it.
++func horizon_tint(c: Color) -> Color:
++	return c.lerp(OPEN_HORIZON, OPEN_TINT * reveal)
++
++
++## The mood's zenith colour as the reveal leaves it.
++func zenith_tint(c: Color) -> Color:
++	return c.lerp(OPEN_ZENITH, OPEN_TINT * reveal)
++
++
++## How far the camera must see to reach the edge of the mist sea.
++func horizon_distance() -> float:
++	return MIST_RADIUS
++
++
++## The steppe's height at world `xz` (the mesh is this, sampled on its rings).
++func steppe_height_at(xz: Vector2) -> float:
++	_ensure_noise()
++	var local := xz - Vector2(global_position.x, global_position.z)
++	var r := local.length()
++	var y := steppe_y + global_position.y
++	y += ROLL * _roll.get_noise_2d(local.x, local.y) * smoothstep(ROLL_FROM.x, ROLL_FROM.y, r)
++	for p in _foot:
++		var d := Vector2(p.x, p.z).distance_to(xz)
++		y = minf(y, p.y - FOOT_CLEAR + FOOT_SLOPE * maxf(d - FOOT_FLAT, 0.0))
++	return y
++
++
++## Regenerates the steppe, the ridges, the mist sea and the cloud deck.
++func rebuild() -> void:
++	_rebuild_queued = false
++	if not is_inside_tree():
++		return
++	if is_instance_valid(far):
++		remove_child(far)
++		far.queue_free()
++	_mist.clear()
++	_noise_ready = false
++	_ensure_noise()
++	_find_foot()
++	far = Node3D.new()
++	far.name = "Far"
++	add_child(far, false, Node.INTERNAL_MODE_BACK)
++	far.add_child(_mesh_node("Steppe", _steppe_mesh()))
++	for i in mini(ring_radii.size(), RINGS.size()):
++		far.add_child(_mesh_node("Ridges%d" % (i + 1), _ring_mesh(i)))
++	var noise_tex := NoiseTexture2D.new()
++	noise_tex.width = 256
++	noise_tex.height = 256
++	noise_tex.seamless = true
++	noise_tex.generate_mipmaps = true
++	var n := FastNoiseLite.new()
++	n.seed = seed + 5
++	n.frequency = 0.02
++	n.fractal_octaves = 3
++	noise_tex.noise = n
++	for i in MIST_LAYERS.size():
++		var mat := ShaderMaterial.new()
++		mat.shader = preload("res://assets/shaders/mist_sea.gdshader")
++		mat.set_shader_parameter("noise_tex", noise_tex)
++		mat.set_shader_parameter("noise_scale", 0.0007 * (1.0 + 0.5 * i))
++		mat.render_priority = i
++		_mist.append(mat)
++		var node := _mesh_node("Mist%d" % (i + 1), _disc_mesh(MIST_RADIUS, 72))
++		node.position.y = steppe_y + MIST_LAYERS[i].above
++		node.material_override = mat
++		far.add_child(node)
++	# The storm's cloud deck overhead: the same slab shader, dark, thickening toward the horizon.
++	_cloud = ShaderMaterial.new()
++	_cloud.shader = preload("res://assets/shaders/mist_sea.gdshader")
++	_cloud.set_shader_parameter("noise_tex", noise_tex)
++	_cloud.set_shader_parameter("noise_scale", CLOUD.noise_scale)
++	_cloud.set_shader_parameter("thickness", CLOUD.thickness)
++	_cloud.set_shader_parameter("soft", 1.0)
++	_cloud.set_shader_parameter("banks_range", Vector2(0.35, 1.7))
++	_cloud.set_shader_parameter("rim_fade", Vector2(MIST_RADIUS * 0.55, MIST_RADIUS * 0.97))
++	var deck := _mesh_node("Clouds", _disc_mesh(MIST_RADIUS, 72))
++	deck.position.y = steppe_y + CLOUD.above
++	deck.material_override = _cloud
++	far.add_child(deck)
++	_apply_reveal()
++	_process(0.0)
++
++
++func _apply_reveal() -> void:
++	if far:
++		far.visible = reveal > 0.0
++	for i in _mist.size():
++		var layer: Dictionary = MIST_LAYERS[i]
++		_mist[i].set_shader_parameter("thickness", lerpf(layer.closed, layer.open, reveal))
++
++
++func _queue_rebuild() -> void:
++	if _rebuild_queued or not is_inside_tree():
++		return
++	_rebuild_queued = true
++	rebuild.call_deferred()
++
++
++func _ensure_noise() -> void:
++	if _noise_ready:
++		return
++	_noise_ready = true
++	_roll = FastNoiseLite.new()
++	_roll.seed = seed
++	_roll.frequency = 1.0 / 900.0
++	_roll.fractal_octaves = 3
++	_patch = FastNoiseLite.new()
++	_patch.seed = seed + 1
++	_patch.frequency = 1.0 / 260.0
++	_patch.fractal_octaves = 2
++	if _foot.is_empty():
++		_find_foot()
++
++
++func _find_foot() -> void:
++	_foot = PackedVector3Array()
++	if trail == null or trail.curve == null or trail.length() <= 0.0:
++		return
++	var top := steppe_y + global_position.y + FOOT_CLEAR + 1.0
++	var count := int(trail.length() / 4.0)
++	for i in count + 1:
++		var p := trail.point_at(float(i) / count)
++		if p.y < top:
++			_foot.append(p)
++
++
++func _mesh_node(node_name: String, mesh: ArrayMesh) -> MeshInstance3D:
++	var node := MeshInstance3D.new()
++	node.name = node_name
++	node.mesh = mesh
++	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
++	return node
++
++
++## Faceted triangles: every face its own normal, colours per vertex.
++func _faceted(verts: PackedVector3Array, cols: PackedColorArray) -> ArrayMesh:
++	var normals := PackedVector3Array()
++	normals.resize(verts.size())
++	for i in range(0, verts.size(), 3):
++		var nrm := (verts[i + 2] - verts[i]).cross(verts[i + 1] - verts[i]).normalized()
++		normals[i] = nrm
++		normals[i + 1] = nrm
++		normals[i + 2] = nrm
++	var arrays := []
++	arrays.resize(Mesh.ARRAY_MAX)
++	arrays[Mesh.ARRAY_VERTEX] = verts
++	arrays[Mesh.ARRAY_NORMAL] = normals
++	arrays[Mesh.ARRAY_COLOR] = cols
++	var mesh := ArrayMesh.new()
++	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
++	var mat := StandardMaterial3D.new()
++	mat.vertex_color_use_as_albedo = true
++	mat.vertex_color_is_srgb = true
++	mat.roughness = 1.0
++	mesh.surface_set_material(0, mat)
++	return mesh
++
++
++## A grid of rows x columns (columns wrap around) as faceted quads, upward-facing.
++func _grid(points: Array[PackedVector3Array], colors: Array[PackedColorArray]) -> ArrayMesh:
++	var verts := PackedVector3Array()
++	var cols := PackedColorArray()
++	for r in points.size() - 1:
++		var a := points[r]
++		var b := points[r + 1]
++		var ca := colors[r]
++		var cb := colors[r + 1]
++		var n := a.size()
++		for j in n:
++			var k := (j + 1) % n
++			# Rows run outward and columns clockwise seen from above, so these face up.
++			verts.append_array([a[j], b[j], a[k], a[k], b[j], b[k]])
++			cols.append_array([ca[j], cb[j], ca[k], ca[k], cb[j], cb[k]])
++	return _faceted(verts, cols)
++
++
++func _steppe_mesh() -> ArrayMesh:
++	const RINGS_N := 60
++	const SEGMENTS := 160
++	var points: Array[PackedVector3Array] = []
++	var colors: Array[PackedColorArray] = []
++	var origin := Vector2(global_position.x, global_position.z)
++	for i in range(1, RINGS_N + 1):
++		var r := steppe_radius * pow(float(i) / RINGS_N, 1.8)
++		var row := PackedVector3Array()
++		var crow := PackedColorArray()
++		for j in SEGMENTS:
++			var a := TAU * (j + 0.5 * (i % 2)) / SEGMENTS
++			var local := Vector2(sin(a), -cos(a)) * r
++			var y := steppe_height_at(origin + local) - global_position.y
++			row.append(Vector3(local.x, y, local.y))
++			crow.append(_steppe_tint(local, y))
++		points.append(row)
++		colors.append(crow)
++	return _grid(points, colors)
++
++
++func _steppe_tint(local: Vector2, y: float) -> Color:
++	var n := _patch.get_noise_2d(local.x, local.y) * 0.7 + _patch.get_noise_2d(local.x * 3.7, local.y * 3.7) * 0.3
++	var c := steppe_color
++	if n < 0.0:
++		c = c.lerp(Color(0.42, 0.4, 0.2), smoothstep(0.0, -0.6, n))  # olive hollows
++	else:
++		c = c.lerp(Color(0.72, 0.58, 0.3), smoothstep(0.0, 0.6, n))  # pale dry grass
++	var hollow := clampf((steppe_y - y) / ROLL, -1.0, 1.0)
++	return c.darkened(0.15 * maxf(hollow, 0.0))
++
++
++func _ring_mesh(index: int) -> ArrayMesh:
++	var ring: Dictionary = RINGS[index]
++	var radius: float = ring_radii[index]
++	var depth := radius * 0.38
++	var segments: int = ring.segments
++	var peaks := FastNoiseLite.new()
++	peaks.seed = seed + 10 + index
++	peaks.frequency = 1.0
++	peaks.fractal_octaves = 3
++	var jitter := FastNoiseLite.new()
++	jitter.seed = seed + 20 + index
++	jitter.frequency = 9.0
++	var low := steppe_y - 25.0
++	var gap: Vector3 = ring.gap
++	var base_color: Color = ring.color
++	var points: Array[PackedVector3Array] = []
++	var colors: Array[PackedColorArray] = []
++	for p in PROFILE.size():
++		points.append(PackedVector3Array())
++		colors.append(PackedColorArray())
++	for j in segments:
++		var a := TAU * j / segments
++		var dir := Vector2(sin(a), -cos(a))
++		# Peaks: noise around the ring (sampled on a circle, so it wraps), sharpened.
++		var k := 3.0 + index * 1.5
++		var n := peaks.get_noise_2d(dir.x * k, dir.y * k)
++		var ridged := 1.0 - absf(peaks.get_noise_2d(dir.x * k * 2.3 + 40.0, dir.y * k * 2.3))
++		var t := clampf(0.45 + 1.1 * n + 0.45 * (ridged - 0.6), 0.0, 1.0)
++		var crest := steppe_y + lerpf(ring.low, ring.high, pow(t, 1.6))
++		var off := absf(wrapf(a, -PI, PI))
++		crest = lerpf(steppe_y + gap.z, crest, smoothstep(gap.x, gap.y, off))
++		var shift := jitter.get_noise_2d(dir.x, dir.y) * depth * 0.12
++		for p in PROFILE.size():
++			var f: Vector2 = PROFILE[p]
++			var wob := 0.0 if p == 0 or p == PROFILE.size() - 1 else jitter.get_noise_2d(dir.x * 3.0 + p, dir.y * 3.0) * 0.12
++			var h := clampf(f.y + wob, 0.0, 1.0)
++			var r := radius - depth * 0.5 + depth * f.x + (shift if p > 0 and p < PROFILE.size() - 1 else 0.0)
++			var y := lerpf(low, crest, h)
++			points[p].append(Vector3(dir.x * r, y, dir.y * r))
++			colors[p].append(_ridge_tint(index, base_color, y, crest, jitter.get_noise_2d(dir.x * 5.0, dir.y * 5.0 + p)))
++	return _grid(points, colors)
++
++
++func _ridge_tint(index: int, base: Color, y: float, crest: float, n: float) -> Color:
++	var c := base.lightened(0.06 * n)
++	var above := y - steppe_y
++	if index == 0:
++		# The near foothills keep a little of the steppe's gold low down.
++		c = c.lerp(steppe_color.darkened(0.25), 0.55 * (1.0 - smoothstep(40.0, 160.0, above)))
++	# Old snow on the highest crests of the far rings.
++	if index > 0 and above > 480.0 and y > crest - 120.0:
++		c = c.lerp(Color(0.62, 0.66, 0.74), 0.6 * smoothstep(480.0, 760.0, above))
++	return c
++
++
++func _disc_mesh(radius: float, segments: int) -> ArrayMesh:
++	var verts := PackedVector3Array()
++	for j in segments:
++		var a0 := TAU * j / segments
++		var a1 := TAU * (j + 1) / segments
++		verts.append_array([Vector3.ZERO, Vector3(sin(a0), 0.0, -cos(a0)) * radius, Vector3(sin(a1), 0.0, -cos(a1)) * radius])
++	var arrays := []
++	arrays.resize(Mesh.ARRAY_MAX)
++	arrays[Mesh.ARRAY_VERTEX] = verts
++	var mesh := ArrayMesh.new()
++	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
++	return mesh
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn scenes/levels/heavens_call.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn	2026-11-08 17:05:54.699863400 +0800
++++ scenes/levels/heavens_call.tscn	2026-11-08 17:25:55.604052600 +0800
+@@ -15,20 +15,28 @@
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_sword_planted.tscn" id="13"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_helmet.tscn" id="14"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_breastplate.tscn" id="15"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_spear_broken.tscn" id="16"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_scarf_worn.tscn" id="17"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_cairn.tscn" id="18"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_fire_ring.tscn" id="19"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_a.tscn" id="20"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_b.tscn" id="21"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_shard.tscn" id="22"]
++[ext_resource type="Script" path="res://scripts/levels/vista.gd" id="23"]
++[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_khadag_post.tscn" id="24"]
++[ext_resource type="Script" path="res://scripts/environment/grass_field.gd" id="grass_script"]
++[ext_resource type="Image" path="res://assets/grass/heavens_summit.res" id="mask_summit"]
++[ext_resource type="Image" path="res://assets/grass/heavens_upper.res" id="mask_upper"]
++[ext_resource type="Image" path="res://assets/grass/heavens_switchback.res" id="mask_switchback"]
++[ext_resource type="Image" path="res://assets/grass/heavens_middle.res" id="mask_middle"]
++[ext_resource type="Image" path="res://assets/grass/heavens_lower.res" id="mask_lower"]
+ 
+ [sub_resource type="ShaderMaterial" id="sky_material"]
+ shader = ExtResource("5")
+ shader_parameter/horizon_color = Color(0.6, 0.62, 0.63, 1)
+ shader_parameter/zenith_color = Color(0.36, 0.42, 0.5, 1)
+ shader_parameter/glow_size = 0.25
+ shader_parameter/glow_energy = 0.48
+ 
+ [sub_resource type="Sky" id="sky"]
+ sky_material = SubResource("sky_material")
+@@ -113,21 +121,21 @@
+ narrows = PackedVector2Array(0.18, 4.0, 0.4, 3.5, 0.82, 4.0)
+ 
+ [node name="Player" parent="." instance=ExtResource("2")]
+ walk_speed = 2.0
+ can_sprint = false
+ lantern = false
+ 
+ [node name="GameplayCamera" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
+ current = true
+ fov = 60.0
+-far = 600.0
++far = 5000.0
+ script = ExtResource("3")
+ target = NodePath("../Player")
+ min_pitch = -5.0
+ max_pitch = 45.0
+ collision_mask = 2
+ 
+ [node name="UI" type="CanvasLayer" parent="." groups=["overlay"]]
+ layer = 10
+ 
+ [node name="Fade" type="ColorRect" parent="UI"]
+@@ -139,29 +147,30 @@
+ [node name="Mist" type="FogVolume" parent="."]
+ size = Vector3(110, 30, 110)
+ material = SubResource("mist_material")
+ 
+ [node name="Storm" type="Node" parent="."]
+ script = ExtResource("9")
+ 
+ [node name="Soundscape" type="Node" parent="."]
+ script = ExtResource("11")
+ 
+-[node name="MoodDirector" type="Node" parent="." node_paths=PackedStringArray("wind", "sun", "world_environment", "mist", "storm", "follow", "soundscape")]
++[node name="MoodDirector" type="Node" parent="." node_paths=PackedStringArray("wind", "sun", "world_environment", "mist", "storm", "follow", "soundscape", "vista")]
+ script = ExtResource("8")
+ wind = NodePath("../Wind")
+ sun = NodePath("../Sun")
+ world_environment = NodePath("../WorldEnvironment")
+ mist = NodePath("../Mist")
+ storm = NodePath("../Storm")
+ follow = NodePath("../Player")
+ soundscape = NodePath("../Soundscape")
++vista = NodePath("../Vista")
+ 
+ [node name="Debris" type="Node3D" parent="."]
+ 
+ [node name="Sword1" parent="Debris" instance=ExtResource("13")]
+ transform = Transform3D(0.53901786, 0.10202675, -0.8360923, -0.020825997, 0.99394757, 0.10786329, 0.84203684, -0.04072779, 0.53788036, 10.038814, 59.978245, -102.024086)
+ height_from_origin = true
+ 
+ [node name="Helmet1" parent="Debris" instance=ExtResource("14")]
+ transform = Transform3D(0.41035736, 0.33672315, 0.8474812, -0.20038807, 0.9399134, -0.27641895, -0.8896355, -0.05639455, 0.4531757, 7.235731, 61.337097, -100.12228)
+ height_from_origin = true
+@@ -462,10 +471,149 @@
+ transform = Transform3D(0.018131547, -0.08625731, 0.79512954, -0.055455443, 0.7932841, 0.087321684, -0.7978697, -0.057096917, 0.012000038, -25.859455, 200.48512, 49.642353)
+ height_from_origin = true
+ 
+ [node name="BoulderB13" parent="Rocks" instance=ExtResource("21")]
+ transform = Transform3D(0.50068164, -0.23587699, -0.70970404, 0.014710092, 0.8570049, -0.27445617, 0.74773085, 0.14108373, 0.4806182, -9.189081, 207.642, 42.32368)
+ height_from_origin = true
+ 
+ [node name="BoulderA16" parent="Rocks" instance=ExtResource("20")]
+ transform = Transform3D(-0.71401817, 0, 0.547885, 0.07703421, 0.8910594, 0.10039301, -0.5424423, 0.1265426, -0.7069252, 7, 214.5204, 30.476988)
+ height_from_origin = true
++
++[node name="Vista" type="Node3D" parent="." node_paths=PackedStringArray("trail", "world_environment", "wind")]
++script = ExtResource("23")
++trail = NodePath("../Trail")
++world_environment = NodePath("../WorldEnvironment")
++wind = NodePath("../Wind")
++
++[node name="Ovoos" type="Node3D" parent="Vista"]
++
++
++[node name="Ovoo1" type="Node3D" parent="Vista/Ovoos"]
++transform = Transform3D(0.9396926, 0, 0.34202012, 0, 1, 0, -0.34202012, 0, 0.9396926, -14, 219.9, -4.5)
++
++[node name="Cairn" parent="Vista/Ovoos/Ovoo1" instance=ExtResource("18")]
++transform = Transform3D(2.3, 0, 0, 0, 2.3, 0, 0, 0, 2.3, 0, 0, 0)
++height_from_origin = true
++
++[node name="Khadag1" parent="Vista/Ovoos/Ovoo1" instance=ExtResource("24")]
++transform = Transform3D(1.3277696, 0.08226181, 0.22969711, -0.056270394, 1.3399373, -0.15460163, -0.2374056, 0.14248164, 1.3213015, 0.86249995, 0.345, 1.4938937)
++height_from_origin = true
++
++[node name="Khadag2" parent="Vista/Ovoos/Ovoo1" instance=ExtResource("24")]
++transform = Transform3D(-0.7738717, 0.09386069, 0.9123118, -0.06420449, 1.1852261, -0.1764004, -0.91487736, -0.16257149, -0.75932217, 0.92, 0.345, -1.5934867)
++height_from_origin = true
++
++[node name="Khadag3" parent="Vista/Ovoos/Ovoo1" instance=ExtResource("24")]
++transform = Transform3D(-0.4945707, -0.14926365, -1.3548506, -0.026319196, 1.4420568, -0.14926367, 1.362794, -0.02631921, -0.4945708, -1.5855404, 0.345, -0.27957356)
++height_from_origin = true
++
++[node name="Ovoo2" type="Node3D" parent="Vista/Ovoos"]
++transform = Transform3D(0.81915206, 0, -0.57357645, 0, 1, 0, 0.57357645, 0, 0.81915206, 13, 219.9, -5.5)
++
++[node name="Cairn" parent="Vista/Ovoos/Ovoo2" instance=ExtResource("18")]
++transform = Transform3D(1.9, 0, 0, 0, 1.9, 0, 0, 0, 1.9, 0, 0, 0)
++height_from_origin = true
++
++[node name="Khadag1" parent="Vista/Ovoos/Ovoo2" instance=ExtResource("24")]
++transform = Transform3D(0.62090254, 0.17132345, 1.0712742, -0.0595, 1.237835, -0.16347495, -1.0832543, 0.030208947, 0.6230149, 1.2162374, 0.285, 0.21445549)
++height_from_origin = true
++
++[node name="Khadag2" parent="Vista/Ovoos/Ovoo2" instance=ExtResource("24")]
++transform = Transform3D(-1.0791296, -0.099847704, -0.38472033, -0.034676746, 1.1325289, -0.19666156, 0.39595056, -0.17294128, -1.065746, -0.66499996, 0.285, -1.1518137)
++height_from_origin = true
++
++[node name="Ovoo3" type="Node3D" parent="Vista/Ovoos"]
++transform = Transform3D(0.34202015, 0, 0.9396926, 0, 1, 0, -0.9396926, 0, 0.34202015, 2.5, 219.9, -10)
++
++[node name="Cairn" parent="Vista/Ovoos/Ovoo3" instance=ExtResource("18")]
++transform = Transform3D(2.1, 0, 0, 0, 2.1, 0, 0, 0, 2.1, 0, 0, 0)
++height_from_origin = true
++
++[node name="Khadag1" parent="Vista/Ovoos/Ovoo3" instance=ExtResource("24")]
++transform = Transform3D(1.4, 0, 0, 0, 1.3946726, -0.12201803, 0, 0.12201803, 1.3946726, 0, 0.315, 1.4699999)
++height_from_origin = true
++
++[node name="Khadag2" parent="Vista/Ovoos/Ovoo3" instance=ExtResource("24")]
++transform = Transform3D(-0.2070951, 0.18700705, 1.1671076, 0.016361, 1.1852261, -0.18700704, -1.1818815, -0.016360996, -0.2070951, 1.5690066, 0.315, -0.13727029)
++height_from_origin = true
++
++[node name="Khadag3" parent="Vista/Ovoos/Ovoo3" instance=ExtResource("24")]
++transform = Transform3D(-1.2800314, -0.013808098, 0.22655854, -0.04100476, 1.2903099, -0.15303177, -0.22324438, -0.15782727, -1.2709258, -0.12811893, 0.315, -1.4644063)
++height_from_origin = true
++
++[node name="Khadag4" parent="Vista/Ovoos/Ovoo3" instance=ExtResource("24")]
++transform = Transform3D(0.372766, -0.2067012, -1.0140612, 0.03644699, 1.0797899, -0.20670119, 1.0342714, 0.036447003, 0.372766, -1.4890293, 0.315, 0.26255605)
++height_from_origin = true
++
++
++[node name="Grass" type="Node3D" parent="."]
++
++[node name="Lower" type="Node3D" parent="Grass"]
++transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 94, 24, -60)
++script = ExtResource("grass_script")
++extent = Vector2(160, 144)
++texel_size = 0.5
++mask = ExtResource("mask_lower")
++ray_above = 49.0
++ray_below = 49.0
++blades_per_m2 = 40.0
++min_height = 0.2
++max_height = 0.7
++base_color = Color(0.15, 0.14, 0.09, 1)
++tip_color = Color(0.46, 0.41, 0.25, 1)
++
++[node name="Middle" type="Node3D" parent="Grass"]
++transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -27, 81, -66)
++script = ExtResource("grass_script")
++extent = Vector2(176, 128)
++texel_size = 0.5
++mask = ExtResource("mask_middle")
++ray_above = 59.0
++ray_below = 59.0
++blades_per_m2 = 40.0
++min_height = 0.2
++max_height = 0.7
++base_color = Color(0.15, 0.14, 0.09, 1)
++tip_color = Color(0.46, 0.41, 0.25, 1)
++
++[node name="Switchback" type="Node3D" parent="Grass"]
++transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -46, 134, -39)
++script = ExtResource("grass_script")
++extent = Vector2(144, 96)
++texel_size = 0.5
++mask = ExtResource("mask_switchback")
++ray_above = 46.0
++ray_below = 46.0
++blades_per_m2 = 40.0
++min_height = 0.2
++max_height = 0.7
++base_color = Color(0.15, 0.14, 0.09, 1)
++tip_color = Color(0.46, 0.41, 0.25, 1)
++
++[node name="Upper" type="Node3D" parent="Grass"]
++transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -21, 187, 0)
++script = ExtResource("grass_script")
++extent = Vector2(80, 144)
++texel_size = 0.5
++mask = ExtResource("mask_upper")
++ray_above = 58.0
++ray_below = 58.0
++blades_per_m2 = 40.0
++min_height = 0.2
++max_height = 0.7
++base_color = Color(0.15, 0.14, 0.09, 1)
++tip_color = Color(0.58, 0.52, 0.33, 1)
++
++[node name="Summit" type="Node3D" parent="Grass"]
++transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 220, 0)
++script = ExtResource("grass_script")
++extent = Vector2(48, 32)
++texel_size = 0.5
++mask = ExtResource("mask_summit")
++ray_above = 8.0
++ray_below = 8.0
++blades_per_m2 = 26.0
++min_height = 0.3
++max_height = 0.85
++base_color = Color(0.32, 0.23, 0.09, 1)
++tip_color = Color(0.86, 0.67, 0.3, 1)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_vista.gd tests/test_heavens_vista.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_vista.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_heavens_vista.gd	2026-11-08 17:12:39.052230200 +0800
+@@ -0,0 +1,154 @@
++extends "res://tests/case.gd"
++## Heavens call summit vista (Task 6): the far world hidden until `reveal` opens it, the ovoos on
++## the summit, golden grass at the top and sparse tufts along the trail.
++
++const SCENE := "res://scenes/levels/heavens_call.tscn"
++
++
++func test_vista_hidden_until_reveal(lv) -> void:
++	check_eq(lv.vista.reveal, 0.0, "vista hidden on start")
++
++
++func test_ovoos_on_summit(lv) -> void:
++	var ovoos: Array = lv.vista.get_node("Ovoos").get_children()
++	check_eq(ovoos.size(), 3, "three ovoos")
++	for o: Node3D in ovoos:
++		check(lv.trail.progress_at(o.global_position) >= 0.9, "ovoo near the summit")
++
++
++func test_summit_grass_is_golden_and_waving(lv) -> void:
++	var g: GrassField = lv.get_node("Grass/Summit")
++	check(g.blade_count() > 2000, "summit field populated")
++	check(g.tip_color.r > g.tip_color.b + 0.15, "golden tips")
++
++
++## Ruling 2: each trail field is sampled at the trail centre point nearest its own centre, and
++## that point must lie inside the field, so the check can't pass on an empty sample.
++func test_trail_grass_is_sparse(lv) -> void:
++	var trail_fields := 0
++	for g: GrassField in lv.get_node("Grass").get_children():
++		if g.name == "Summit":
++			continue
++		trail_fields += 1
++		var c := Vector2(g.global_position.x, g.global_position.z)
++		var best := Vector3.ZERO
++		var best_d := INF
++		for i in 2001:
++			var p: Vector3 = lv.trail.point_at(i / 2000.0)
++			var d := Vector2(p.x, p.z).distance_to(c)
++			if d < best_d:
++				best_d = d
++				best = p
++		var corner := c - g.extent * 0.5
++		var inside := Rect2(corner, g.extent).has_point(Vector2(best.x, best.z))
++		check(inside, "%s: the nearest trail point lies inside the field" % g.name)
++		var on_path: float = g.sample(Vector2(best.x, best.z)).x
++		check(on_path < 0.05, "%s keeps the gravel centre clear" % g.name)
++		check(g.blade_count() > 0, "%s has tufts" % g.name)
++	check(trail_fields >= 3 and trail_fields <= 5, "3-5 trail sections, got %d" % trail_fields)
++
++
++## Trail masks stay sparse (mostly 0.1-0.35, never a meadow); the summit is dense (0.6-0.9).
++## Every mask was generated at its field's size, so nothing gets stretched.
++func test_grass_masks_fit_their_fields(lv) -> void:
++	for g: GrassField in lv.get_node("Grass").get_children():
++		check(g.mask != null, "%s has a mask" % g.name)
++		if g.mask == null:
++			continue
++		check_eq(g.mask.get_size(), g.mask_size(), "%s mask size" % g.name)
++		var data: PackedByteArray = g.mask.get_data()
++		var top := 0
++		for i in range(0, data.size(), 2):
++			top = maxi(top, data[i])
++		if g.name == "Summit":
++			check(top >= roundi(0.6 * 255) and top <= roundi(0.9 * 255) + 1, "summit density peaks at %.2f" % (top / 255.0))
++		else:
++			check(top <= roundi(0.45 * 255), "%s density peaks at %.2f" % [g.name, top / 255.0])
++
++
++## Every kit piece of the ovoos sways and shades from its own origin (Task 5's rule).
++func test_ovoo_kit_measures_from_origin(lv) -> void:
++	var n := 0
++	for ovoo: Node3D in lv.vista.get_node("Ovoos").get_children():
++		var posts := 0
++		var cairns := 0
++		for kit: Node3D in ovoo.get_children():
++			check(kit.height_from_origin, "%s/%s opts in" % [ovoo.name, kit.name])
++			if kit.scene_file_path.ends_with("prop_khadag_post.tscn"):
++				posts += 1
++			elif kit.scene_file_path.ends_with("prop_cairn.tscn"):
++				cairns += 1
++				check(kit.scale.y >= 1.5 and kit.scale.y <= 2.5, "%s cairn scaled 1.5-2.5x" % ovoo.name)
++			for g in kit.find_children("*", "GeometryInstance3D", true, false):
++				check((g as GeometryInstance3D).get_instance_shader_parameter("height_from_origin") == true,
++						"%s/%s mesh %s has the parameter on" % [ovoo.name, kit.name, g.name])
++				n += 1
++		check_eq(cairns, 1, "%s has one cairn" % ovoo.name)
++		check(posts >= 2 and posts <= 4, "%s has 2-4 khadag posts" % ovoo.name)
++	check(n >= 9, "meshes checked: %d" % n)
++
++
++## The far world (steppe, ridges, mist sea) only exists once the reveal has started, so it can't
++## show through the fog on the climb.
++func test_far_vista_only_while_revealing(lv) -> void:
++	check(not lv.vista.far.visible, "far vista hidden at reveal 0")
++	lv.vista.reveal = 0.3
++	check(lv.vista.far.visible, "far vista shown once revealing")
++
++
++## At the summit, reveal opens the mood's fog and the mist without fighting the mood: back at 0
++## the mood's own values return.
++func test_reveal_opens_the_fog(lv) -> void:
++	lv.player.global_position = lv.trail.point_at(1.0) + Vector3.UP
++	await physics_frames(2)
++	var env: Environment = lv.get_node("WorldEnvironment").environment
++	var closed_fog := env.fog_density
++	var closed_mist: float = lv.mist.material.get_shader_parameter("density")
++	check_near(closed_fog, lv.mood.current.fog_density, 0.0001, "reveal 0 leaves the mood's fog alone")
++	lv.vista.reveal = 1.0
++	await physics_frames(1)
++	check(env.fog_density < closed_fog * 0.1, "reveal 1 opens the summit fog (%.5f)" % env.fog_density)
++	check(env.volumetric_fog_density < closed_fog * 0.1, "and the volumetric fog")
++	check(lv.mist.material.get_shader_parameter("density") < closed_mist * 0.3, "and the ground mist")
++	lv.vista.reveal = 0.0
++	await physics_frames(1)
++	check_near(env.fog_density, closed_fog, 0.0001, "closing the reveal restores the mood's fog")
++
++
++## The square massif's outer edge (and its -200 m skirt) sits under the steppe everywhere, while
++## the whole trail stays above it.
++func test_steppe_buries_the_terrain_edge(lv) -> void:
++	var t: MountainTerrain = lv.terrain
++	var half: Vector2 = t.extent * 0.5 - Vector2.ONE * t.cell
++	var lowest_margin := INF
++	for i in 241:
++		var s := -1.0 + i / 120.0
++		for xz: Vector2 in [Vector2(s * half.x, -half.y), Vector2(s * half.x, half.y), Vector2(-half.x, s * half.y), Vector2(half.x, s * half.y)]:
++			var w := xz + Vector2(t.global_position.x, t.global_position.z)
++			lowest_margin = minf(lowest_margin, lv.vista.steppe_height_at(w) - t.height_at(w))
++	check(lowest_margin > 1.0, "steppe above the terrain edge everywhere (min margin %.2f m)" % lowest_margin)
++	for i in 401:
++		var p: Vector3 = lv.trail.point_at(i / 400.0)
++		var below: float = p.y - lv.vista.steppe_height_at(Vector2(p.x, p.z))
++		if below < 1.0:
++			check(false, "trail at %.3f is %.2f m above the steppe" % [i / 400.0, below])
++			break
++
++
++## The steppe is huge and well below the summit, the ridges stand in three rings between 600 and
++## 2500 m, and the gameplay camera sees out to the horizon.
++func test_vista_reaches_the_horizon(lv) -> void:
++	var v: Vista = lv.vista
++	check(v.steppe_radius >= 3000.0, "steppe radius %.0f" % v.steppe_radius)
++	var drop: float = lv.trail.point_at(1.0).y - v.steppe_y
++	check(drop >= 150.0 and drop <= 250.0, "steppe %.0f m below the summit" % drop)
++	check_eq(v.ring_radii.size(), 3, "three ridge rings")
++	for r: float in v.ring_radii:
++		check(r >= 600.0 and r <= 2500.0, "ring at %.0f m" % r)
++	check(lv.follow_cam.far >= v.horizon_distance(), "camera far %.0f reaches the horizon" % lv.follow_cam.far)
++
++
++func test_reset_closes_the_vista(lv) -> void:
++	lv.vista.reveal = 1.0
++	lv.reset_scene()
++	check_eq(lv.vista.reveal, 0.0, "reset closes the vista")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tools/make_heavens_grass.gd tools/make_heavens_grass.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tools/make_heavens_grass.gd	1970-01-01 08:00:00.000000000 +0800
++++ tools/make_heavens_grass.gd	2026-11-08 17:28:11.572831900 +0800
+@@ -0,0 +1,208 @@
++extends SceneTree
++## Run once to (re)write the Heavens call grass masks (the make_starter_grass.gd pattern):
++##   godot --headless --path . -s res://tools/make_heavens_grass.gd
++## Writes assets/grass/heavens_<name>.res for every field in SECTIONS plus the summit, and prints
++## the matching `Grass` GrassField nodes as .tscn text (position, extent, ray span), which were
++## pasted into scenes/levels/heavens_call.tscn. The masks are only a start: repaint them with the
++## Grass Painter. Re-running overwrites the paint, and changing a section's progress range moves
++## its field, so paste the printed nodes again after that. The look (blades_per_m2, heights,
++## colours) is set on the nodes in the scene and isn't printed.
++##
++## Trail sections: sparse windswept tufts between bare rock (density 0.1-0.35 in clumps), zero on
++## the gravel centre, a thin line of tufts along the path's edges (stronger near the top, where
++## the light is low and the edges help the path read), none on steep ground. Each texel belongs
++## to the section its nearest trail point (Trail.progress_at) falls in, so fields never overlap.
++## Summit: golden grass over the whole plateau (0.6-0.9), clear around the ovoo cairns, with a
++## worn line where the trail arrives.
++
++const OUT := "res://assets/grass/heavens_%s.res"
++## name, progress from, progress to. The last section stops where the summit field takes over.
++const SECTIONS := [
++	["Lower", 0.0, 0.24],
++	["Middle", 0.24, 0.5],
++	["Switchback", 0.5, 0.72],
++	["Upper", 0.72, 1.0],
++]
++const TRAIL_TEXEL := 0.5
++## Metres beyond the corridor's reach a field's rectangle extends.
++const MARGIN := 10.0
++## Gravel kept clear: no grass within PATH_CLEAR of the centreline, full by PATH_CLEAR + RAMP.
++const PATH_CLEAR := 2.0
++const PATH_RAMP := 1.2
++## Tufts thin out toward the corridor's edge (the walls and drops beyond get none).
++const REACH := 8.5
++## Ground steeper than this (rise per metre) gets no grass, fading in over the band below it.
++const STEEP := Vector2(0.45, 0.8)
++const TUFT_MAX := 0.35
++const EDGE_BAND := 0.2
++const EDGE_BAND_TOP := 0.32  ## near the summit, progress 0.82+
++const SUMMIT_CENTRE := Vector3(0, 220, 0)
++const SUMMIT_EXTENT := Vector2(48, 32)
++const SUMMIT_TEXEL := 0.5
++## The ovoo cairns' ground positions (Vista/Ovoos in the scene): grass keeps clear of their stones.
++const OVOOS := [Vector2(-14.0, -4.5), Vector2(13.0, -5.5), Vector2(2.5, -10.0)]
++
++
++func _initialize() -> void:
++	_run.call_deferred()
++
++
++func _run() -> void:
++	var lv: Node = load("res://scenes/levels/heavens_call.tscn").instantiate()
++	root.add_child(lv)
++	await physics_frame
++	var ok := true
++	var text := PackedStringArray()
++	for cfg: Dictionary in fields(lv):
++		var image := build_mask(lv, cfg)
++		var path: String = OUT % cfg.name.to_lower()
++		var err := ResourceSaver.save(image, path)
++		ok = ok and err == OK
++		var top := 0
++		var data := image.get_data()
++		for i in range(0, data.size(), 2):
++			top = maxi(top, data[i])
++		print("%s %s -> %s: %s (peak density %.2f)" % [cfg.name, image.get_size(), path,
++			"saved" if err == OK else "error %d" % err, top / 255.0])
++		text.append(node_text(cfg))
++	print("\n".join(text))
++	quit(0 if ok else 1)
++
++
++## Field settings: the trail sections sized to their stretch of trail, then the summit.
++static func fields(lv: Node) -> Array[Dictionary]:
++	var trail: Trail = lv.get_node("Trail")
++	var out: Array[Dictionary] = []
++	for s: Array in SECTIONS:
++		var lo := Vector3.INF
++		var hi := -Vector3.INF
++		var n := 200
++		for i in n + 1:
++			var p := trail.point_at(lerpf(s[1], s[2], float(i) / n))
++			lo = lo.min(p)
++			hi = hi.max(p)
++		var reach := REACH + MARGIN
++		var size := Vector2(hi.x - lo.x, hi.z - lo.z) + Vector2.ONE * reach * 2.0
++		size = (size / GrassField.CHUNK_SIZE).ceil() * GrassField.CHUNK_SIZE
++		var centre := Vector3((lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5, (lo.z + hi.z) * 0.5)
++		centre = centre.round()
++		var span := (hi.y - lo.y) * 0.5 + 25.0
++		out.append({"name": s[0], "from": s[1], "to": s[2], "centre": centre, "extent": size,
++			"texel": TRAIL_TEXEL, "span": ceilf(span)})
++	out.append({"name": "Summit", "centre": SUMMIT_CENTRE, "extent": SUMMIT_EXTENT,
++		"texel": SUMMIT_TEXEL, "span": 8.0})
++	return out
++
++
++## The mask for one field config (from fields()), built in memory; nothing is written.
++static func build_mask(lv: Node, cfg: Dictionary) -> Image:
++	var trail: Trail = lv.get_node("Trail")
++	var terrain: MountainTerrain = lv.get_node("MountainTerrain")
++	var texel: float = cfg.texel
++	var extent: Vector2 = cfg.extent
++	var centre: Vector3 = cfg.centre
++	var size := Vector2i(ceili(extent.x / texel), ceili(extent.y / texel))
++	var corner := Vector2(centre.x, centre.z) - extent * 0.5
++	var summit: bool = cfg.name == "Summit"
++	var summit_rect := Rect2(Vector2(SUMMIT_CENTRE.x, SUMMIT_CENTRE.z) - SUMMIT_EXTENT * 0.5, SUMMIT_EXTENT)
++	# The section's own centreline, for a cheap "near this section at all" test.
++	var line := PackedVector2Array()
++	if not summit:
++		var count := int((cfg.to - cfg.from) * trail.length() / 2.0) + 1
++		for i in count + 1:
++			var p := trail.point_at(lerpf(cfg.from, cfg.to, float(i) / count))
++			line.append(Vector2(p.x, p.z))
++	var tufts := FastNoiseLite.new()
++	tufts.seed = 31
++	tufts.frequency = 1.0 / 2.2
++	tufts.fractal_octaves = 2
++	var broad := FastNoiseLite.new()
++	broad.seed = 37
++	broad.frequency = 1.0 / 30.0
++	var hnoise := FastNoiseLite.new()
++	hnoise.seed = 41
++	hnoise.frequency = 1.0 / 6.0
++
++	var data := PackedByteArray()
++	data.resize(size.x * size.y * 2)
++	for y in size.y:
++		for x in size.x:
++			var p := corner + (Vector2(x, y) + Vector2(0.5, 0.5)) * texel
++			var density := 0.0
++			var height := 0.5 + 0.35 * hnoise.get_noise_2d(p.x, p.y)
++			if summit:
++				density = _summit_density(p, trail, terrain, broad, tufts)
++				height = 0.55 + 0.4 * hnoise.get_noise_2d(p.x, p.y)
++			elif not summit_rect.has_point(p) and _near_line(p, line, REACH + 1.0):
++				density = _trail_density(p, cfg, trail, terrain, tufts, broad)
++			var i := (y * size.x + x) * 2
++			data[i] = roundi(clampf(density, 0.0, 1.0) * 255.0)
++			data[i + 1] = roundi(clampf(height, 0.0, 1.0) * 255.0)
++	return Image.create_from_data(size.x, size.y, false, Image.FORMAT_RG8, data)
++
++
++static func _trail_density(p: Vector2, cfg: Dictionary, trail: Trail, terrain: MountainTerrain,
++		tufts: FastNoiseLite, broad: FastNoiseLite) -> float:
++	var ground := Vector3(p.x, terrain.height_at(p), p.y)
++	var progress := trail.progress_at(ground)
++	if progress < cfg.from or (progress >= cfg.to and cfg.to < 1.0):
++		return 0.0
++	var dc := trail.distance_to_centre(ground)
++	var off_path := smoothstep(PATH_CLEAR, PATH_CLEAR + PATH_RAMP, dc)
++	if off_path <= 0.0:
++		return 0.0
++	var steep := 1.0 - smoothstep(STEEP.x, STEEP.y, _slope(terrain, p))
++	var reach := 1.0 - smoothstep(REACH - 2.5, REACH, dc)
++	# Clumps: metre-sized noise spots thresholded into tufts, gathered where the broad noise is
++	# high; a little lusher low down, thinner in the eerie stretch.
++	var n := tufts.get_noise_2d(p.x, p.y)
++	var clump := smoothstep(-0.05, 0.3, n) * smoothstep(-0.45, 0.15, broad.get_noise_2d(p.x, p.y))
++	var lush := lerpf(1.0, 0.7, smoothstep(0.5, 0.75, progress))
++	var density := TUFT_MAX * clump * lush
++	# A thin line of tufts just off the gravel, so the path's edge reads in low light.
++	var band_strength := lerpf(EDGE_BAND, EDGE_BAND_TOP, smoothstep(0.78, 0.84, progress))
++	var band := band_strength * (1.0 - smoothstep(PATH_CLEAR + 0.8, PATH_CLEAR + 2.2, dc))
++	band *= 0.55 + 0.45 * smoothstep(-0.4, 0.3, tufts.get_noise_2d(p.x * 2.0, p.y * 2.0))
++	density = maxf(density, band)
++	density *= off_path * steep * reach
++	return 0.0 if density < 0.06 else minf(density, 0.4)
++
++
++static func _summit_density(p: Vector2, trail: Trail, terrain: MountainTerrain,
++		broad: FastNoiseLite, tufts: FastNoiseLite) -> float:
++	var h := terrain.height_at(p)
++	if h < SUMMIT_CENTRE.y - 0.8:
++		return 0.0  # over the edge
++	var steep := 1.0 - smoothstep(0.3, 0.6, _slope(terrain, p))
++	var n := broad.get_noise_2d(p.x, p.y) * 0.6 + tufts.get_noise_2d(p.x, p.y) * 0.4
++	var density := 0.6 + 0.3 * clampf(n * 0.5 + 0.5, 0.0, 1.0)
++	for o: Vector2 in OVOOS:
++		density *= smoothstep(1.6, 2.6, p.distance_to(o))
++	# A worn line where the trail arrives, ending in the meadow.
++	var ground := Vector3(p.x, h, p.y)
++	if trail.progress_at(ground) < 0.995:
++		density *= lerpf(0.15, 1.0, smoothstep(0.9, 2.2, trail.distance_to_centre(ground)))
++	return density * steep
++
++
++static func _slope(terrain: MountainTerrain, p: Vector2) -> float:
++	const D := 0.75
++	var gx := terrain.height_at(p + Vector2(D, 0)) - terrain.height_at(p - Vector2(D, 0))
++	var gz := terrain.height_at(p + Vector2(0, D)) - terrain.height_at(p - Vector2(0, D))
++	return Vector2(gx, gz).length() / (2.0 * D)
++
++
++static func _near_line(p: Vector2, line: PackedVector2Array, reach: float) -> bool:
++	var r2 := reach * reach
++	for q in line:
++		if p.distance_squared_to(q) <= r2:
++			return true
++	return false
++
++
++## The GrassField node for `cfg` as .tscn text (its mask is ExtResource "mask_<name>").
++static func node_text(cfg: Dictionary) -> String:
++	var c: Vector3 = cfg.centre
++	var e: Vector2 = cfg.extent
++	return "[node name=\"%s\" type=\"Node3D\" parent=\"Grass\"]\ntransform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, %s, %s, %s)\nscript = ExtResource(\"grass_script\")\nextent = Vector2(%s, %s)\ntexel_size = %s\nmask = ExtResource(\"mask_%s\")\nray_above = %s\nray_below = %s\n" % [
++		cfg.name, c.x, c.y, c.z, e.x, e.y, cfg.texel, cfg.name.to_lower(), cfg.span, cfg.span]
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/docs/REUSE.md docs/REUSE.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/docs/REUSE.md	2026-11-08 17:05:54.764876600 +0800
++++ docs/REUSE.md	2026-11-08 17:27:05.777231300 +0800
+@@ -26,20 +26,25 @@
+ - **`[editor_plugins]`**: `enabled=PackedStringArray("res://addons/grass_painter/plugin.cfg")`
+   (Project Settings > Plugins > enable *Grass Painter*).
+ 
+ ## The ground rule
+ 
+ Grass finds the ground with a ray against **layer 2 only**. Walkable ground therefore needs collision
+ on layers **1 + 2** (`collision_layer = 3`). Kit ground pieces (mounds) set `collision = true` so
+ they carry it. Anything not on layer 2 (boulders, props) gets no grass on top of it, and a spot with
+ no ground below gets no blade.
+ 
++The ray runs from `ray_above` (default 40 m) over the field's own height (its node y) down to
++`ray_below` (default 5 m) under it. A field on high or steep ground, such as a section of a mountain
++trail, sits at the section's middle height with both widened to cover its climb (Heavens call
++uses half the section's height range plus 25 m). The first ground-layer hit from the top wins.
++
+ ## A new level in five steps
+ 
+ 1. Add a `Wind` node. Set `strength` and `direction_degrees` (a compass angle the wind blows
+    toward: 0 = toward -Z, 90 = toward +X, clockwise from above).
+ 2. Add a `GrassField` node.
+ 3. Set its `extent` (metres, centred on the node) to cover the area you want to paint. Settle
+    `extent` and `texel_size` before painting: changing either afterwards stretches the painted mask.
+ 4. Save the scene, then select the `GrassField`. The Grass Painter toolbar appears in the 3D editor.
+ 5. Paint: LMB paints, Shift+LMB erases, `[` / `]` change the radius, Ctrl+Z undoes a stroke. The
+    toolbar sets mode, radius, strength, target and falloff. The mask is only written once the
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/assets/shaders/mist_sea.gdshader assets/shaders/mist_sea.gdshader
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/assets/shaders/mist_sea.gdshader	1970-01-01 08:00:00.000000000 +0800
++++ assets/shaders/mist_sea.gdshader	2026-11-08 17:24:08.826973800 +0800
+@@ -0,0 +1,52 @@
++// The Heavens call mist sea (scripts/levels/vista.gd): a huge flat layer read as a slab of mist.
++// Its opacity is the slab's optical depth along the view ray, thickness / cos(view angle), so it
++// is a thin veil straight down and a solid white sea toward the horizon, which hides the steppe's
++// far edge. Patchy drifting noise breaks it into banks, it fades softly where it meets the
++// ground (no hard intersection line), and it blends into the horizon colour with distance.
++shader_type spatial;
++render_mode unshaded, blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
++
++uniform vec4 color : source_color = vec4(0.72, 0.74, 0.78, 1.0);
++uniform vec4 horizon_color : source_color = vec4(0.5, 0.5, 0.52, 1.0);
++// Vertical optical depth of the slab where the noise is average.
++uniform float thickness = 0.4;
++// Metres of depth over which the mist fades in from a surface it meets.
++uniform float soft = 30.0;
++uniform sampler2D noise_tex : repeat_enable, filter_linear_mipmap;
++uniform float noise_scale = 0.0012;
++uniform vec2 offset = vec2(0.0);
++// Distance (m) over which the mist's own colour gives way to the horizon colour.
++uniform vec2 horizon_fade = vec2(900.0, 4000.0);
++// Optical depth range from thin gaps to thick banks.
++uniform vec2 banks_range = vec2(0.08, 2.2);
++// The layer fades out between these radii from its centre (a cloud deck, whose rim would
++// otherwise cut a line across the sky).
++uniform vec2 rim_fade = vec2(1e6, 2e6);
++uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
++
++varying vec3 world_pos;
++varying float rim;
++
++void vertex() {
++	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
++	rim = length(VERTEX.xz);
++}
++
++void fragment() {
++	vec3 to_cam = CAMERA_POSITION_WORLD - world_pos;
++	float dist = length(to_cam);
++	float cos_view = abs(to_cam.y) / max(dist, 0.001);
++	vec2 p = world_pos.xz * noise_scale;
++	float n = texture(noise_tex, p + offset).r * 0.65 + texture(noise_tex, p * 3.3 - offset * 1.7).r * 0.35;
++	float banks = mix(banks_range.x, banks_range.y, smoothstep(0.38, 0.7, n));
++	float tau = thickness * banks / max(cos_view, 0.01);
++	float alpha = 1.0 - exp(-tau);
++	// Soft where it meets the ground: compare the scene's depth behind this fragment to its own.
++	float depth = texture(depth_tex, SCREEN_UV).r;
++	vec4 view = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, depth, 1.0);
++	float scene_z = -view.z / view.w;
++	alpha *= clamp((scene_z + VERTEX.z) / soft, 0.0, 1.0);
++	ALBEDO = mix(color.rgb, horizon_color.rgb, smoothstep(horizon_fade.x, horizon_fade.y, dist));
++	alpha *= 1.0 - smoothstep(rim_fade.x, rim_fade.y, rim);
++	ALPHA = clamp(alpha, 0.0, 1.0);
++}
+# new/changed binary or audio files:
+assets/grass/heavens_lower.res
+assets/grass/heavens_middle.res
+assets/grass/heavens_summit.res
+assets/grass/heavens_switchback.res
+assets/grass/heavens_upper.res

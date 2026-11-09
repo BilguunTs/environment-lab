@@ -1,0 +1,637 @@
+[gd_scene format=3 uid="uid://cfto2dnjof4ts"]
+
+[ext_resource type="Script" uid="uid://borim302v7pvd" path="res://scripts/levels/heavens_call.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="2"]
+[ext_resource type="Script" uid="uid://0ocioxwqntjv" path="res://scripts/camera/follow_camera.gd" id="3"]
+[ext_resource type="Script" uid="uid://clu2xlfypwyfn" path="res://scripts/environment/wind.gd" id="4"]
+[ext_resource type="Shader" uid="uid://bv1q5vx48rmn4" path="res://assets/shaders/gradient_sky.gdshader" id="5"]
+[ext_resource type="Script" uid="uid://bxxud6cuok8kg" path="res://scripts/levels/trail.gd" id="6"]
+[ext_resource type="Script" uid="uid://bs2piq1udljre" path="res://scripts/levels/mountain_terrain.gd" id="7"]
+[ext_resource type="Script" uid="uid://fuv70ohyrkha" path="res://scripts/levels/mood_director.gd" id="8"]
+[ext_resource type="Script" uid="uid://dg0piudyfmo83" path="res://scripts/levels/storm.gd" id="9"]
+[ext_resource type="Shader" uid="uid://m2tft0fthrns" path="res://assets/shaders/ground_mist.gdshader" id="10"]
+[ext_resource type="Script" uid="uid://7nfpf12hvp3d" path="res://scripts/levels/soundscape.gd" id="11"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_shield_broken.tscn" id="12"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_sword_planted.tscn" id="13"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_helmet.tscn" id="14"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_breastplate.tscn" id="15"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_spear_broken.tscn" id="16"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_scarf_worn.tscn" id="17"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_cairn.tscn" id="18"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_fire_ring.tscn" id="19"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_a.tscn" id="20"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_b.tscn" id="21"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_shard.tscn" id="22"]
+[ext_resource type="Script" uid="uid://o0w3y54yrc57" path="res://scripts/levels/vista.gd" id="23"]
+[ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_khadag_post.tscn" id="24"]
+[ext_resource type="Script" uid="uid://noq38bsbwtlp" path="res://scripts/levels/summit_sequence.gd" id="25"]
+[ext_resource type="Script" uid="uid://dwaiunbtysa5d" path="res://scripts/environment/grass_field.gd" id="grass_script"]
+[ext_resource type="Image" uid="uid://h2w82phfxwvt" path="res://assets/grass/heavens_lower.res" id="mask_lower"]
+[ext_resource type="Image" uid="uid://defeal8p0414c" path="res://assets/grass/heavens_middle.res" id="mask_middle"]
+[ext_resource type="Image" uid="uid://b3pbdn7gax7vu" path="res://assets/grass/heavens_summit.res" id="mask_summit"]
+[ext_resource type="Image" uid="uid://cme736mjhdlsn" path="res://assets/grass/heavens_switchback.res" id="mask_switchback"]
+[ext_resource type="Image" uid="uid://dlifw2oxtajbf" path="res://assets/grass/heavens_upper.res" id="mask_upper"]
+
+[sub_resource type="ShaderMaterial" id="sky_material"]
+shader = ExtResource("5")
+shader_parameter/horizon_color = Color(0.6, 0.62, 0.63, 1)
+shader_parameter/zenith_color = Color(0.36, 0.42, 0.5, 1)
+shader_parameter/glow_size = 0.25
+shader_parameter/glow_energy = 0.48
+
+[sub_resource type="Sky" id="sky"]
+sky_material = SubResource("sky_material")
+
+[sub_resource type="Environment" id="Environment_1"]
+background_mode = 2
+background_color = Color(0.6, 0.62, 0.63, 1)
+sky = SubResource("sky")
+ambient_light_source = 2
+ambient_light_color = Color(0.36, 0.42, 0.5, 1)
+ambient_light_energy = 0.35
+tonemap_mode = 4
+ssao_enabled = true
+glow_enabled = true
+glow_intensity = 0.6
+glow_bloom = 0.05
+fog_enabled = true
+fog_light_color = Color(0.6, 0.62, 0.63, 1)
+fog_sun_scatter = 0.15
+fog_density = 0.009
+fog_aerial_perspective = 0.5
+fog_sky_affect = 0.5
+fog_height = 1.5
+fog_height_density = 0.06
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.004
+volumetric_fog_albedo = Color(0.78, 0.85, 0.95, 1)
+volumetric_fog_anisotropy = 0.45
+volumetric_fog_length = 80.0
+volumetric_fog_ambient_inject = 0.2
+volumetric_fog_sky_affect = 0.0
+
+[sub_resource type="Curve3D" id="trail_curve"]
+bake_interval = 0.5
+_data = {
+"points": PackedVector3Array(0, 0, 0, 0, 0, 0, 148.624, 0, -12.28, 0.215, -0.103, 1.316, -0.215, 0.103, -1.316, 148.034, 0.3, -16.236, 0.252, -0.107, 1.309, -0.252, 0.107, -1.309, 147.332, 0.62, -20.174, 0.29, -0.107, 1.301, -0.29, 0.107, -1.301, 146.519, 0.94, -24.09, 0.327, -0.107, 1.292, -0.327, 0.107, -1.292, 145.594, 1.26, -27.981, 0.364, -0.107, 1.282, -0.364, 0.107, -1.282, 144.558, 1.58, -31.845, 0.402, -0.107, 1.271, -0.402, 0.107, -1.271, 143.409, 1.9, -35.676, 0.442, -0.107, 1.258, -0.442, 0.107, -1.258, 142.144, 2.22, -39.471, 0.485, -0.107, 1.242, -0.485, 0.107, -1.242, 140.758, 2.54, -43.223, 0.534, -0.107, 1.221, -0.534, 0.107, -1.221, 139.236, 2.86, -46.922, 0.598, -0.107, 1.191, -0.598, 0.107, -1.191, 137.552, 3.18, -50.549, 0.688, -0.107, 1.14, -0.688, 0.107, -1.14, 135.65, 3.5, -54.067, 0.79, -0.293, 1.072, -0.79, 0.293, -1.072, 133.425, 3.82, -57.388, 0.852, -0.507, 1.025, -0.852, 0.507, -1.025, 130.912, 5.26, -60.5, 0.881, -0.533, 1.001, -0.881, 0.533, -1.001, 128.312, 6.86, -63.54, 0.909, -0.533, 0.975, -0.909, 0.533, -0.975, 125.627, 8.46, -66.505, 0.937, -0.533, 0.949, -0.937, 0.533, -0.949, 122.858, 10.06, -69.391, 0.964, -0.533, 0.921, -0.964, 0.533, -0.921, 120.007, 11.66, -72.197, 0.99, -0.533, 0.893, -0.99, 0.533, -0.893, 117.075, 13.26, -74.918, 1.016, -0.533, 0.863, -1.016, 0.533, -0.863, 114.065, 14.86, -77.552, 1.041, -0.533, 0.833, -1.041, 0.533, -0.833, 110.979, 16.46, -80.096, 1.066, -0.533, 0.801, -1.066, 0.533, -0.801, 107.818, 18.06, -82.548, 1.089, -0.533, 0.769, -1.089, 0.533, -0.769, 104.586, 19.66, -84.903, 1.112, -0.533, 0.736, -1.112, 0.533, -0.736, 101.284, 21.26, -87.161, 1.134, -0.533, 0.701, -1.134, 0.533, -0.701, 97.915, 22.86, -89.317, 1.155, -0.533, 0.666, -1.155, 0.533, -0.666, 94.481, 24.46, -91.369, 1.175, -0.533, 0.63, -1.175, 0.533, -0.63, 90.986, 26.06, -93.314, 1.194, -0.533, 0.593, -1.194, 0.533, -0.593, 87.433, 27.66, -95.15, 1.212, -0.533, 0.555, -1.212, 0.533, -0.555, 83.823, 29.26, -96.873, 1.229, -0.533, 0.517, -1.229, 0.533, -0.517, 80.161, 30.86, -98.482, 1.245, -0.533, 0.477, -1.245, 0.533, -0.477, 76.45, 32.46, -99.974, 1.259, -0.533, 0.437, -1.259, 0.533, -0.437, 72.693, 34.06, -101.346, 1.273, -0.533, 0.396, -1.273, 0.533, -0.396, 68.894, 35.66, -102.597, 1.285, -0.533, 0.354, -1.285, 0.533, -0.354, 65.056, 37.26, -103.723, 1.296, -0.533, 0.312, -1.296, 0.533, -0.312, 61.183, 38.86, -104.723, 1.306, -0.533, 0.269, -1.306, 0.533, -0.269, 57.279, 40.46, -105.595, 1.314, -0.533, 0.225, -1.314, 0.533, -0.225, 53.348, 42.06, -106.336, 1.321, -0.533, 0.181, -1.321, 0.533, -0.181, 49.395, 43.66, -106.944, 1.326, -0.533, 0.136, -1.326, 0.533, -0.136, 45.424, 45.26, -107.419, 1.33, -0.533, 0.09, -1.33, 0.533, -0.09, 41.438, 46.86, -107.757, 1.332, -0.533, 0.044, -1.332, 0.533, -0.044, 37.443, 48.46, -107.959, 1.333, -0.533, -0.002, -1.333, 0.533, 0.002, 33.444, 50.06, -108.021, 1.332, -0.533, -0.049, -1.332, 0.533, 0.049, 29.445, 51.66, -107.944, 1.33, -0.533, -0.097, -1.33, 0.533, 0.097, 25.451, 53.26, -107.725, 1.325, -0.533, -0.144, -1.325, 0.533, 0.144, 21.468, 54.86, -107.364, 1.319, -0.533, -0.192, -1.319, 0.533, 0.192, 17.5, 56.46, -106.86, 1.311, -0.533, -0.241, -1.311, 0.533, 0.241, 13.553, 58.06, -106.211, 1.302, -0.533, -0.286, -1.302, 0.533, 0.286, 9.633, 59.66, -105.417, 1.297, -0.533, -0.31, -1.297, 0.533, 0.31, 5.741, 61.26, -104.494, 1.296, -0.533, -0.313, -1.296, 0.533, 0.313, 1.853, 62.86, -103.554, 1.296, -0.533, -0.312, -1.296, 0.533, 0.312, -2.036, 64.46, -102.615, 1.295, -0.533, -0.317, -1.295, 0.533, 0.317, -5.925, 66.06, -101.68, 1.288, -0.533, -0.345, -1.288, 0.533, 0.345, -9.806, 67.66, -100.715, 1.274, -0.533, -0.393, -1.274, 0.533, 0.393, -13.651, 69.26, -99.611, 1.257, -0.533, -0.442, -1.257, 0.533, 0.442, -17.449, 70.86, -98.358, 1.239, -0.533, -0.492, -1.239, 0.533, 0.492, -21.195, 72.46, -96.956, 1.218, -0.533, -0.541, -1.218, 0.533, 0.541, -24.883, 74.06, -95.407, 1.196, -0.533, -0.589, -1.196, 0.533, 0.589, -28.506, 75.66, -93.712, 1.171, -0.533, -0.637, -1.171, 0.533, 0.637, -32.057, 77.26, -91.872, 1.144, -0.533, -0.684, -1.144, 0.533, 0.684, -35.531, 78.86, -89.89, 1.115, -0.533, -0.73, -1.115, 0.533, 0.73, -38.921, 80.46, -87.768, 1.085, -0.533, -0.774, -1.085, 0.533, 0.774, -42.223, 82.06, -85.51, 1.055, -0.533, -0.815, -1.055, 0.533, 0.815, -45.433, 83.66, -83.124, 1.026, -0.533, -0.852, -1.026, 0.533, 0.852, -48.552, 85.26, -80.619, 1.002, -0.533, -0.879, -1.002, 0.533, 0.879, -51.587, 86.86, -78.014, 0.992, -0.533, -0.891, -0.992, 0.533, 0.891, -54.564, 88.46, -75.343, 1.01, -0.533, -0.87, -1.01, 0.533, 0.87, -57.539, 90.06, -72.668, 1.035, -0.533, -0.84, -1.035, 0.533, 0.84, -60.624, 91.66, -70.124, 1.022, -0.533, -0.855, -1.022, 0.533, 0.855, -63.749, 93.26, -67.628, 0.982, -0.533, -0.901, -0.982, 0.533, 0.901, -66.758, 94.86, -64.993, 0.94, -0.533, -0.945, -0.94, 0.533, 0.945, -69.643, 96.46, -62.223, 0.896, -0.533, -0.986, -0.896, 0.533, 0.986, -72.4, 98.06, -59.325, 0.851, -0.533, -1.026, -0.851, 0.533, 1.026, -75.022, 99.66, -56.305, 0.803, -0.533, -1.064, -0.803, 0.533, 1.064, -77.504, 101.26, -53.169, 0.754, -0.533, -1.099, -0.754, 0.533, 1.099, -79.841, 102.86, -49.923, 0.703, -0.533, -1.132, -0.703, 0.533, 1.132, -82.028, 104.46, -46.574, 0.651, -0.533, -1.163, -0.651, 0.533, 1.163, -84.06, 106.06, -43.129, 0.597, -0.533, -1.192, -0.597, 0.533, 1.192, -85.933, 107.66, -39.595, 0.542, -0.533, -1.218, -0.542, 0.533, 1.218, -87.644, 109.26, -35.979, 0.486, -0.533, -1.241, -0.486, 0.533, 1.241, -89.188, 110.86, -32.29, 0.441, -0.533, -1.258, -0.441, 0.533, 1.258, -90.562, 112.46, -28.534, 0.455, -0.353, -1.249, -0.455, 0.353, 1.249, -91.835, 114.06, -24.743, 0.186, -0.113, -1.275, -0.186, 0.113, 1.275, -93.292, 114.58, -21.04, -0.422, -0.053, -1.207, 0.422, 0.053, 1.207, -92.951, 114.74, -17.095, -0.949, -0.053, -0.857, 0.949, 0.053, 0.857, -90.76, 114.9, -13.797, -1.244, -0.053, -0.297, 1.244, 0.053, 0.297, -87.257, 115.06, -11.953, -1.234, -0.053, 0.335, 1.234, 0.053, -0.335, -83.298, 115.22, -12.014, -0.938, -0.143, 0.879, 0.938, 0.143, -0.879, -79.853, 115.38, -13.966, -0.686, -0.383, 1.137, 0.686, 0.383, -1.137, -77.671, 116.08, -17.288, -0.675, -0.533, 1.149, 0.675, 0.533, -1.149, -75.737, 117.68, -20.789, -0.735, -0.533, 1.112, 0.735, 0.533, -1.112, -73.619, 119.28, -24.182, -0.792, -0.533, 1.072, 0.792, 0.533, -1.072, -71.325, 120.88, -27.458, -0.843, -0.533, 1.032, 0.843, 0.533, -1.032, -68.868, 122.48, -30.614, -0.885, -0.533, 0.997, 0.885, 0.533, -0.997, -66.268, 124.08, -33.653, -0.91, -0.533, 0.974, 0.91, 0.533, -0.974, -63.558, 125.68, -36.596, -0.904, -0.533, 0.98, 0.904, 0.533, -0.98, -60.805, 127.28, -39.497, -0.891, -0.533, 0.992, 0.891, 0.533, -0.992, -58.134, 128.88, -42.474, -0.92, -0.533, 0.964, 0.92, 0.533, -0.964, -55.461, 130.48, -45.449, -0.977, -0.533, 0.906, 0.977, 0.533, -0.906, -52.613, 132.08, -48.257, -1.03, -0.533, 0.846, 1.03, 0.533, -0.846, -49.6, 133.68, -50.887, -1.079, -0.533, 0.782, 1.079, 0.533, -0.782, -46.433, 135.28, -53.33, -1.125, -0.533, 0.715, 1.125, 0.533, -0.715, -43.124, 136.88, -55.576, -1.166, -0.533, 0.645, 1.166, 0.533, -0.645, -39.686, 138.48, -57.619, -1.203, -0.533, 0.574, 1.203, 0.533, -0.574, -36.13, 140.08, -59.449, -1.235, -0.533, 0.5, 1.235, 0.533, -0.5, -32.469, 141.68, -61.06, -1.263, -0.533, 0.424, 1.263, 0.533, -0.424, -28.718, 143.28, -62.447, -1.287, -0.533, 0.347, 1.287, 0.533, -0.347, -24.89, 144.88, -63.604, -1.305, -0.533, 0.268, 1.305, 0.533, -0.268, -20.998, 146.48, -64.526, -1.319, -0.533, 0.188, 1.319, 0.533, -0.188, -17.058, 148.08, -65.211, -1.325, -0.533, 0.141, 1.325, 0.533, -0.141, -13.083, 149.68, -65.656, -1.32, -0.323, 0.14, 1.32, 0.323, -0.14, -9.108, 151.28, -66.055, -1.271, -0.083, -0.169, 1.271, 0.083, 0.169, -5.164, 151.62, -66.496, -1.036, -0.053, -0.749, 1.036, 0.053, 0.749, -1.481, 151.78, -65.043, -0.55, -0.053, -1.154, 0.55, 0.053, 1.154, 1.054, 151.94, -62.002, 0.07, -0.053, -1.277, -0.07, 0.053, 1.277, 1.821, 152.1, -58.118, 0.674, -0.053, -1.087, -0.674, 0.053, 1.087, 0.632, 152.26, -54.341, 1.107, -0.173, -0.661, -1.107, 0.173, 0.661, -2.222, 152.42, -51.597, 1.277, -0.413, -0.369, -1.277, 0.413, 0.369, -6.012, 153.3, -50.373, 1.277, -0.533, -0.378, -1.277, 0.533, 0.378, -9.886, 154.9, -49.381, 1.244, -0.533, -0.476, -1.244, 0.533, 0.476, -13.676, 156.5, -48.104, 1.201, -0.533, -0.575, -1.201, 0.533, 0.575, -17.35, 158.1, -46.526, 1.15, -0.533, -0.672, -1.15, 0.533, 0.672, -20.884, 159.7, -44.655, 1.089, -0.533, -0.766, -1.089, 0.533, 0.766, -24.25, 161.3, -42.495, 1.019, -0.533, -0.857, -1.019, 0.533, 0.857, -27.419, 162.9, -40.057, 0.94, -0.533, -0.943, -0.94, 0.533, 0.943, -30.365, 164.5, -37.353, 0.852, -0.533, -1.023, -0.852, 0.533, 1.023, -33.06, 166.1, -34.399, 0.754, -0.533, -1.097, -0.754, 0.533, 1.097, -35.476, 167.7, -31.212, 0.648, -0.533, -1.163, -0.648, 0.533, 1.163, -37.586, 169.3, -27.816, 0.534, -0.533, -1.22, -0.534, 0.533, 1.22, -39.366, 170.9, -24.235, 0.412, -0.533, -1.266, -0.412, 0.533, 1.266, -40.789, 172.5, -20.499, 0.282, -0.533, -1.301, -0.282, 0.533, 1.301, -41.835, 174.1, -16.64, 0.147, -0.533, -1.323, -0.147, 0.533, 1.323, -42.484, 175.7, -12.695, 0.007, -0.533, -1.331, -0.007, 0.533, 1.331, -42.719, 177.3, -8.703, -0.136, -0.533, -1.324, 0.136, 0.533, 1.324, -42.528, 178.9, -4.71, -0.28, -0.533, -1.301, 0.28, 0.533, 1.301, -41.905, 180.5, -0.761, -0.422, -0.533, -1.262, 0.422, 0.533, 1.262, -40.85, 182.1, 3.096, -0.557, -0.533, -1.208, 0.557, 0.533, 1.208, -39.376, 183.7, 6.812, -0.681, -0.533, -1.144, 0.681, 0.533, 1.144, -37.506, 185.3, 10.346, -0.783, -0.533, -1.077, 0.783, 0.533, 1.077, -35.29, 186.9, 13.674, -0.843, -0.533, -1.032, 0.843, 0.533, 1.032, -32.808, 188.5, 16.81, -0.727, -0.533, -1.103, 0.727, 0.533, 1.103, -30.23, 190.1, 19.868, -0.416, -0.533, -1.249, 0.416, 0.533, 1.249, -28.446, 191.7, 23.427, -0.254, -0.533, -1.308, 0.254, 0.533, 1.308, -27.736, 193.3, 27.359, -0.321, -0.533, -1.293, 0.321, 0.533, 1.293, -26.924, 194.9, 31.274, -0.417, -0.533, -1.265, 0.417, 0.533, 1.265, -25.809, 196.5, 35.115, -0.504, -0.533, -1.233, 0.504, 0.533, 1.233, -24.421, 198.1, 38.866, -0.659, -0.533, -1.148, 0.659, 0.533, 1.148, -22.783, 199.7, 42.514, -0.927, -0.533, -0.924, 0.927, 0.533, 0.924, -20.467, 201.3, 45.753, -1.179, -0.533, -0.569, 1.179, 0.533, 0.569, -17.219, 202.9, 48.056, -1.3, -0.533, -0.152, 1.3, 0.533, 0.152, -13.396, 204.5, 49.169, -1.278, -0.533, 0.281, 1.278, 0.533, -0.281, -9.419, 206.1, 48.97, -1.116, -0.533, 0.684, 1.116, 0.533, -0.684, -5.726, 207.7, 47.481, -0.831, -0.533, 1.012, 0.831, 0.533, -1.012, -2.724, 209.3, 44.866, -0.454, -0.533, 1.228, 0.454, 0.533, -1.228, -0.742, 210.9, 41.412, -0.124, -0.467, 1.319, 0.124, 0.467, -1.319, 0, 212.5, 37.5, 0, -0.4, 1.333, 0, 0.4, -1.333, 0, 213.7, 33.5, 0, -0.4, 1.333, 0, 0.4, -1.333, 0, 214.9, 29.5, 0, -0.4, 1.333, 0, 0.4, -1.333, 0, 216.1, 25.5, 0, -0.4, 1.333, 0, 0.4, -1.333, 0, 217.3, 21.5, 0, -0.4, 1.333, 0, 0.4, -1.333, 0, 218.5, 17.5, 0, -0.25, 1.333, 0, 0.25, -1.333, 0, 219.7, 13.5, 0, -0.05, 1.333, 0, 0.05, -1.333, 0, 220, 9.5, 0, 0, 1.333, 0, 0, -1.333, 0, 220, 5.5, 0, 0, 0.917, 0, 0, -0.917, 0, 220, 1.5, 0, 0, 0, 0, 0, 0, 0, 220, 0),
+"tilts": PackedFloat32Array(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+}
+point_count = 165
+
+[sub_resource type="FastNoiseLite" id="mist_noise"]
+frequency = 0.05
+fractal_octaves = 3
+
+[sub_resource type="NoiseTexture3D" id="mist_noise_tex"]
+noise = SubResource("mist_noise")
+seamless = true
+
+[sub_resource type="ShaderMaterial" id="mist_material"]
+shader = ExtResource("10")
+shader_parameter/noise_tex = SubResource("mist_noise_tex")
+shader_parameter/density = 0.35
+shader_parameter/mist_height = 7.0
+shader_parameter/base_height = 0.0
+shader_parameter/noise_scale = 0.035
+shader_parameter/offset = Vector3(0, 0, 0)
+shader_parameter/albedo = Color(0.82, 0.88, 0.96, 1)
+
+[node name="HeavensCall" type="Node3D" unique_id=574474438]
+script = ExtResource("1")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=292728929]
+environment = SubResource("Environment_1")
+
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=1810351049]
+transform = Transform3D(-0.7071, -0.2418, 0.6645, 0, 0.9397, 0.342, -0.7071, 0.2418, -0.6645, 0, 0, 0)
+light_color = Color(1, 0.88, 0.74, 1)
+light_energy = 1.6
+shadow_enabled = true
+directional_shadow_max_distance = 140.0
+
+[node name="Wind" type="Node" parent="." unique_id=831444296]
+script = ExtResource("4")
+
+[node name="Trail" type="Path3D" parent="." unique_id=1645396830]
+curve = SubResource("trail_curve")
+script = ExtResource("6")
+
+[node name="MountainTerrain" type="Node3D" parent="." unique_id=363846001 node_paths=PackedStringArray("trail")]
+script = ExtResource("7")
+trail = NodePath("../Trail")
+narrows = PackedVector2Array(0.18, 4, 0.4, 3.5, 0.82, 4)
+
+[node name="Player" parent="." unique_id=2013122045 instance=ExtResource("2")]
+walk_speed = 2.0
+sprint_speed = 20.0
+lantern = false
+
+[node name="GameplayCamera" type="Camera3D" parent="." unique_id=258697792 node_paths=PackedStringArray("target")]
+current = true
+fov = 60.0
+far = 5000.0
+script = ExtResource("3")
+target = NodePath("../Player")
+min_pitch = -5.0
+max_pitch = 45.0
+collision_mask = 2
+
+[node name="SummitCamera" type="Camera3D" parent="." unique_id=1888992694]
+fov = 60.0
+far = 5000.0
+
+[node name="UI" type="CanvasLayer" parent="." unique_id=811712660 groups=["overlay"]]
+layer = 10
+
+[node name="Fade" type="ColorRect" parent="UI" unique_id=679039841]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+mouse_filter = 2
+color = Color(0, 0, 0, 1)
+
+[node name="Title" type="Label" parent="UI" unique_id=1316598497]
+modulate = Color(1, 1, 1, 0)
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_override_colors/font_color = Color(0.88, 0.88, 0.86, 1)
+theme_override_font_sizes/font_size = 64
+text = "Heavens call"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="SummitSequence" type="Node" parent="." unique_id=679060754 node_paths=PackedStringArray("level", "summit_camera", "title_label")]
+script = ExtResource("25")
+level = NodePath("..")
+summit_camera = NodePath("../SummitCamera")
+title_label = NodePath("../UI/Title")
+
+[node name="Mist" type="FogVolume" parent="." unique_id=444778227]
+size = Vector3(110, 30, 110)
+material = SubResource("mist_material")
+
+[node name="Storm" type="Node" parent="." unique_id=1293156759]
+script = ExtResource("9")
+
+[node name="Soundscape" type="Node" parent="." unique_id=260380952]
+script = ExtResource("11")
+
+[node name="MoodDirector" type="Node" parent="." unique_id=520879848 node_paths=PackedStringArray("wind", "sun", "world_environment", "mist", "storm", "follow", "soundscape", "vista")]
+script = ExtResource("8")
+wind = NodePath("../Wind")
+sun = NodePath("../Sun")
+world_environment = NodePath("../WorldEnvironment")
+mist = NodePath("../Mist")
+storm = NodePath("../Storm")
+follow = NodePath("../Player")
+soundscape = NodePath("../Soundscape")
+vista = NodePath("../Vista")
+
+[node name="Debris" type="Node3D" parent="." unique_id=1790914338]
+
+[node name="Sword1" parent="Debris" unique_id=1877279232 instance=ExtResource("13")]
+transform = Transform3D(0.53901786, 0.10202675, -0.8360923, -0.020825997, 0.99394757, 0.10786329, 0.84203684, -0.04072779, 0.53788036, 10.038814, 59.978245, -102.024086)
+height_from_origin = true
+
+[node name="Helmet1" parent="Debris" unique_id=426874740 instance=ExtResource("14")]
+transform = Transform3D(0.41035736, 0.33672315, 0.8474812, -0.20038807, 0.9399134, -0.27641895, -0.8896355, -0.05639455, 0.4531757, 7.235731, 61.337097, -100.12228)
+height_from_origin = true
+
+[node name="Shield1" parent="Debris" unique_id=543201982 instance=ExtResource("12")]
+transform = Transform3D(0.694886, 0.3272262, -0.6403564, -0.07662161, 0.91909415, 0.38651657, 0.71502626, -0.21951984, 0.66373825, -11.063941, 67.55343, -104.10443)
+height_from_origin = true
+
+[node name="Spear1" parent="Debris" unique_id=1022708086 instance=ExtResource("16")]
+transform = Transform3D(0.9340951, 0.3319918, 0.13133135, -0.34254646, 0.93706924, 0.06755167, -0.10063997, -0.10808677, 0.9890343, -13.952429, 68.816246, -102.13309)
+height_from_origin = true
+
+[node name="Helmet2" parent="Debris" unique_id=1788813683 instance=ExtResource("14")]
+transform = Transform3D(-0.9458099, 0.32457855, -0.009616552, 0.31805643, 0.92002267, -0.22890694, -0.06545085, -0.21956104, -0.9734008, -17.319923, 69.78046, -103.89657)
+height_from_origin = true
+
+[node name="Breastplate1" parent="Debris" unique_id=1576310906 instance=ExtResource("15")]
+transform = Transform3D(0.9170356, 0.31770465, 0.24105927, -0.35773298, 0.9224826, 0.14509651, -0.17627513, -0.2192935, 0.9596028, -28.571781, 76.774185, -88.970055)
+height_from_origin = true
+
+[node name="Sword2" parent="Debris" unique_id=630806416 instance=ExtResource("13")]
+transform = Transform3D(-0.75783974, 0.09642529, 0.64527595, 0.029732853, 0.99309516, -0.11348128, -0.6517629, -0.066814736, -0.75547403, -30.499617, 78.07678, -86.104805)
+height_from_origin = true
+
+[node name="Shield2" parent="Debris" unique_id=1004726907 instance=ExtResource("12")]
+transform = Transform3D(-0.21457464, 0.31494057, 0.9245378, -0.15515122, 0.92357594, -0.3506217, -0.9643059, -0.2186777, -0.14931256, -34.035713, 78.98493, -87.28862)
+height_from_origin = true
+
+[node name="Breastplate2" parent="Debris" unique_id=1395070156 instance=ExtResource("15")]
+transform = Transform3D(-0.2952874, 0.30749667, -0.90457237, 0.3088225, 0.9266856, 0.2142021, 0.90412056, -0.21610112, -0.3686005, -47.015877, 85.4618, -78.51475)
+height_from_origin = true
+
+[node name="Shield3" parent="Debris" unique_id=1070293528 instance=ExtResource("12")]
+transform = Transform3D(-0.9114908, 0.30609846, 0.27475128, 0.22022797, 0.9273453, -0.30253983, -0.34739625, -0.21525437, -0.9126781, -52.907024, 86.423965, -80.446884)
+height_from_origin = true
+
+[node name="Helmet3" parent="Debris" unique_id=611943754 instance=ExtResource("14")]
+transform = Transform3D(0.9153622, 0.30619618, -0.26144984, -0.22477812, 0.92736584, 0.299111, 0.33404633, -0.21502668, 0.91770184, -51.99712, 88.02959, -74.56112)
+height_from_origin = true
+
+[node name="Sword3" parent="Debris" unique_id=1261604887 instance=ExtResource("13")]
+transform = Transform3D(-0.9257883, 0.06210192, -0.37290657, 0.093447134, 0.99339694, -0.06655934, 0.36631078, -0.096466914, -0.9254785, -55.109756, 87.238014, -79.96768)
+height_from_origin = true
+
+[node name="Sword4" parent="Debris" unique_id=1622835998 instance=ExtResource("13")]
+transform = Transform3D(-0.37848186, 0.094651856, 0.9207565, -0.021657355, 0.9935799, -0.11104032, -0.92535526, -0.061967894, -0.37400204, -57.053394, 88.55639, -77.27188)
+height_from_origin = true
+
+[node name="Spear2" parent="Debris" unique_id=513527006 instance=ExtResource("16")]
+transform = Transform3D(0.6526984, 0.19077584, 0.7332049, -0.37005645, 0.9247548, 0.088807836, -0.6610924, -0.3292919, 0.6741838, -58.40438, 89.538475, -74.96779)
+height_from_origin = true
+
+[node name="Sword5" parent="Debris" unique_id=156490742 instance=ExtResource("13")]
+transform = Transform3D(0.3512742, 0.093821995, -0.9315599, 0.028666355, 0.99342227, 0.11086202, 0.93583363, -0.06564739, 0.34627408, -55.90815, 90.27206, -70.11538)
+height_from_origin = true
+
+[node name="Sword6" parent="Debris" unique_id=992896261 instance=ExtResource("13")]
+transform = Transform3D(0.35231444, 0.09409607, 0.93113935, -0.09496233, 0.99339193, -0.06445618, -0.9310514, -0.06571432, 0.3589219, -57.63715, 91.38001, -68.03968)
+height_from_origin = true
+
+[node name="Shield4" parent="Debris" unique_id=535497750 instance=ExtResource("12")]
+transform = Transform3D(0.6068629, 0.28766477, 0.74092263, -0.36883897, 0.9276776, -0.058070138, -0.7040421, -0.23804052, 0.66907513, -59.73011, 92.17168, -67.50984)
+height_from_origin = true
+
+[node name="Helmet4" parent="Debris" unique_id=496216353 instance=ExtResource("14")]
+transform = Transform3D(0.9301129, 0.12862472, 0.34401393, -0.24344537, 0.91725236, 0.3152499, -0.27499866, -0.3769666, 0.88446134, -78.343346, 98.244675, -62.275074)
+height_from_origin = true
+
+[node name="Sword7" parent="Debris" unique_id=1242941923 instance=ExtResource("13")]
+transform = Transform3D(0.4843269, 0.04060538, 0.8739443, -0.07687594, 0.9970337, -0.0037208907, -0.87150306, -0.06538316, 0.4860118, -81.50259, 99.56218, -60.388012)
+height_from_origin = true
+
+[node name="Spear3" parent="Debris" unique_id=731211536 instance=ExtResource("16")]
+transform = Transform3D(-0.23813406, 0.12901804, 0.96262485, -0.2949186, 0.93473274, -0.19823667, -0.925373, -0.33110285, -0.18454188, -81.488625, 100.644905, -56.8508)
+height_from_origin = true
+
+[node name="Shield5" parent="Debris" unique_id=1429059610 instance=ExtResource("12")]
+transform = Transform3D(-0.008376518, 0.120153405, -0.99272, 0.36722574, 0.92375743, 0.10870793, 0.9300941, -0.36364174, -0.051861294, -92.66076, 110.29161, -34.384094)
+height_from_origin = true
+
+[node name="Breastplate3" parent="Debris" unique_id=1885028117 instance=ExtResource("15")]
+transform = Transform3D(0.98992145, 0.13191526, 0.05151704, -0.14161125, 0.9185153, 0.36915562, 0.0013780612, -0.3727304, 0.9279387, -94.15666, 113.09348, -27.869707)
+height_from_origin = true
+
+[node name="Sword8" parent="Debris" unique_id=472155745 instance=ExtResource("13")]
+transform = Transform3D(0.072473794, -0.01645641, -0.9972346, 0.002951954, 0.999863, -0.016285252, 0.99736595, -0.0017635365, 0.072512455, -94.43598, 114.715775, -10.960017)
+height_from_origin = true
+
+[node name="Helmet5" parent="Debris" unique_id=1773562655 instance=ExtResource("14")]
+transform = Transform3D(0.996359, -0.04806407, 0.07041716, 0.047948323, 0.99884427, 0.0033340917, -0.07049603, 5.4432694e-05, 0.9975121, -90.20854, 114.91987, -9.853993)
+height_from_origin = true
+
+[node name="Spear4" parent="Debris" unique_id=281941346 instance=ExtResource("16")]
+transform = Transform3D(0.15561016, -0.03031802, -0.9873532, 0.009327814, 0.9995294, -0.029221812, 0.9877745, -0.004662635, 0.15581976, -86.317184, 115.07053, -15.027648)
+height_from_origin = true
+
+[node name="Shield6" parent="Debris" unique_id=984005154 instance=ExtResource("12")]
+transform = Transform3D(-0.48240644, -0.04343382, 0.87487006, -0.02896949, 0.9990146, 0.033623226, -0.8754683, -0.009124477, -0.48318937, -83.24187, 115.194275, -5.9089527)
+height_from_origin = true
+
+[node name="Sword9" parent="Debris" unique_id=1007028381 instance=ExtResource("13")]
+transform = Transform3D(-0.84658366, -0.1063634, -0.5215198, -0.11817889, 0.992935, -0.010668099, 0.5189699, 0.05260119, -0.8531725, -72.84488, 121.78461, -32.37323)
+height_from_origin = true
+
+[node name="Helmet6" parent="Debris" unique_id=1415969295 instance=ExtResource("14")]
+transform = Transform3D(0.7861651, -0.37800294, -0.48893574, 0.24045974, 0.91588783, -0.3214476, 0.5693185, 0.13514152, 0.8109336, -59.66756, 126.58834, -35.46231)
+height_from_origin = true
+
+[node name="Traces" type="Node3D" parent="." unique_id=1755302918]
+
+[node name="Cairn1" parent="Traces" unique_id=725705451 instance=ExtResource("18")]
+transform = Transform3D(-0.33914107, 0, 0.49495795, 0, 0.6, 0, -0.49495795, 0, -0.33914107, -47.29602, 135.72856, -57.6146)
+height_from_origin = true
+
+[node name="Scarf1" parent="Traces" unique_id=850792786 instance=ExtResource("17")]
+transform = Transform3D(-0.97791237, 0, 0.20901525, 0, 1, 0, -0.20901525, 0, -0.97791237, -16.469242, 148.35136, -61.05246)
+height_from_origin = true
+
+[node name="Cairn2" parent="Traces" unique_id=1587205404 instance=ExtResource("18")]
+transform = Transform3D(0.7405463, 0, 0.11870624, 0, 0.75, 0, -0.11870624, 0, 0.7405463, -2.384597, 152.13693, -56.31622)
+height_from_origin = true
+
+[node name="Fire1" parent="Traces" unique_id=1294108410 instance=ExtResource("19")]
+transform = Transform3D(0.63728905, 0.30802822, -0.70638615, -0.03179656, 0.9263705, 0.3752688, 0.76996857, -0.21669403, 0.60016, -24.28458, 163.11713, -36.420994)
+height_from_origin = true
+
+[node name="Cairn3" parent="Traces" unique_id=334272231 instance=ExtResource("18")]
+transform = Transform3D(0.38210952, 0, -0.39559108, 0, 0.55, 0, 0.39559108, 0, 0.38210952, -25.317434, 164.46606, -33.341206)
+height_from_origin = true
+
+[node name="Cairn4" parent="Traces" unique_id=1866641054 instance=ExtResource("18")]
+transform = Transform3D(-0.19933756, 0, 0.7747674, 0, 0.8, 0, -0.7747674, 0, -0.19933756, -37.047646, 173.42996, -17.672247)
+height_from_origin = true
+
+[node name="Scarf2" parent="Traces" unique_id=282245033 instance=ExtResource("17")]
+transform = Transform3D(-0.71922547, 0, -0.6947767, 0, 1, 0, 0.6947767, 0, -0.71922547, -42.320644, 183.24268, 7.581799)
+height_from_origin = true
+
+[node name="Cairn5" parent="Traces" unique_id=1957720165 instance=ExtResource("18")]
+transform = Transform3D(-0.5717924, 0, -0.40379876, 0, 0.7, 0, 0.40379876, 0, -0.5717924, -30.489542, 195.13127, 33.44996)
+height_from_origin = true
+
+[node name="Cairn6" parent="Traces" unique_id=56358192 instance=ExtResource("18")]
+transform = Transform3D(-0.617651, 0, -0.6546046, 0, 0.9, 0, 0.6546046, 0, -0.617651, -4.8157187, 209.91606, 41.976105)
+height_from_origin = true
+
+[node name="Rocks" type="Node3D" parent="." unique_id=1017209762]
+
+[node name="BoulderA1" parent="Rocks" unique_id=904295119 instance=ExtResource("20")]
+transform = Transform3D(-1.167338, 0.03752901, -0.275524, 0.027463073, 1.1987675, 0.04692828, 0.27670863, 0.039345358, -1.166998, 139.78091, 1.297368, -24.390575)
+height_from_origin = true
+
+[node name="Shard1" parent="Rocks" unique_id=1542539838 instance=ExtResource("22")]
+transform = Transform3D(0.67541176, 0.24056008, -0.3548942, -0.19842963, 0.7624064, 0.1391481, 0.38005883, -0.029450921, 0.70334053, 137.88881, 1.8049321, -26.629469)
+height_from_origin = true
+
+[node name="BoulderB1" parent="Rocks" unique_id=927959253 instance=ExtResource("21")]
+transform = Transform3D(-0.39132974, 0.042714585, 0.8093432, 0.042074095, 0.89860797, -0.027082229, -0.8093768, 0.026060337, -0.3927213, 146.67252, 1.9756241, -44.56085)
+height_from_origin = true
+
+[node name="BoulderA2" parent="Rocks" unique_id=1953638334 instance=ExtResource("20")]
+transform = Transform3D(0.0322496, 0.11972233, -0.9922835, -0.14523903, 0.9828232, 0.113860585, 0.98887086, 0.14044632, 0.049084008, 125.74047, 5.4204655, -55.771427)
+height_from_origin = true
+
+[node name="BoulderB2" parent="Rocks" unique_id=1560746382 instance=ExtResource("21")]
+transform = Transform3D(0.3803509, 0.11353865, 0.44993582, -0.0012285591, 0.5820076, -0.14582764, -0.46403852, 0.09152148, 0.36917758, 125.20051, 6.40744, -58.58357)
+height_from_origin = true
+
+[node name="Shard2" parent="Rocks" unique_id=538780052 instance=ExtResource("22")]
+transform = Transform3D(-0.6624595, 0.13002713, -0.18504137, 0.095538944, 0.6800206, 0.13580985, 0.20498702, 0.10327124, -0.6612983, 119.86247, 13.674327, -81.53415)
+height_from_origin = true
+
+[node name="BoulderA3" parent="Rocks" unique_id=597738572 instance=ExtResource("20")]
+transform = Transform3D(0.7491651, 0.13637783, -0.24526048, -0.14580433, 0.7865603, -0.008000192, 0.2397764, 0.05219188, 0.76143503, 103.314354, 21.36031, -93.24005)
+height_from_origin = true
+
+[node name="BoulderB3" parent="Rocks" unique_id=1846479367 instance=ExtResource("21")]
+transform = Transform3D(-0.5529087, 0.20687038, 0.9281684, 0.16392125, 1.0783181, -0.14268811, -0.936708, 0.06659366, -0.5728381, 101.078384, 22.595972, -96.05821)
+height_from_origin = true
+
+[node name="BoulderA4" parent="Rocks" unique_id=1451531738 instance=ExtResource("20")]
+transform = Transform3D(0.01703661, 0.17726494, -0.88220567, 0.5439345, 0.7008802, 0.15133466, 0.71682984, -0.53604484, -0.09386654, 78.1673, 32.67013, -94.11311)
+height_from_origin = true
+
+[node name="Shard3" parent="Rocks" unique_id=917221725 instance=ExtResource("22")]
+transform = Transform3D(0.39659673, 0.04640084, 0.44783705, -0.12388448, 0.58501476, 0.049095996, -0.43285528, -0.124918945, 0.39627212, 71.94139, 34.09203, -96.946945)
+height_from_origin = true
+
+[node name="BoulderB4" parent="Rocks" unique_id=977548371 instance=ExtResource("21")]
+transform = Transform3D(-0.9540594, 0.18096715, -0.2387919, 0.16409852, 0.98243016, 0.088896915, 0.25068378, 0.045627546, -0.9669931, 56.569725, 40.812, -112.258415)
+height_from_origin = true
+
+[node name="BoulderA5" parent="Rocks" unique_id=927513237 instance=ExtResource("20")]
+transform = Transform3D(1.2138908, 0.281308, -0.37058726, -0.2584251, 1.2687112, 0.116568424, 0.3868922, -0.035178687, 1.2405953, 32.98322, 50.305668, -102.01926)
+height_from_origin = true
+
+[node name="Shard4" parent="Rocks" unique_id=2084400782 instance=ExtResource("22")]
+transform = Transform3D(-0.5233162, 0.17659816, 0.83363855, 0.06979924, 0.98388594, -0.16461016, -0.8492751, -0.027955825, -0.5272098, 29.98254, 51.824665, -100.45836)
+height_from_origin = true
+
+[node name="BoulderB5" parent="Rocks" unique_id=1048774216 instance=ExtResource("21")]
+transform = Transform3D(-0.04512357, 0.121014416, -0.6879821, 0.028124, 0.68917173, 0.119379066, 0.6979777, -0.019945713, -0.049287573, 16.025366, 56.27661, -112.504585)
+height_from_origin = true
+
+[node name="BoulderA6" parent="Rocks" unique_id=620488156 instance=ExtResource("20")]
+transform = Transform3D(0.71479106, 0.18803093, 0.814689, -0.14798449, 1.0833524, -0.12020021, -0.8229061, -0.03149391, 0.7292693, 2.459828, 63.31284, -97.93948)
+height_from_origin = true
+
+[node name="BoulderB6" parent="Rocks" unique_id=2068762963 instance=ExtResource("21")]
+transform = Transform3D(-0.77044994, 0.13196929, -0.1702674, 0.1476291, 0.7839367, -0.060406525, 0.15688382, -0.08959579, -0.77933306, -19.708584, 70.40339, -104.55951)
+height_from_origin = true
+
+[node name="BoulderA7" parent="Rocks" unique_id=1287496192 instance=ExtResource("20")]
+transform = Transform3D(0.9455214, 0.16012934, -0.28345695, -0.12003165, 0.98080254, 0.15368392, 0.3026246, -0.11128762, 0.9465905, -34.198505, 80.53431, -81.77292)
+height_from_origin = true
+
+[node name="BoulderA8" parent="Rocks" unique_id=160534503 instance=ExtResource("20")]
+transform = Transform3D(-0.55966884, 0.083056964, 0.6999088, -0.07076735, 0.88259095, -0.16132334, -0.70125794, -0.15535371, -0.5423122, -53.35048, 85.63031, -82.97536)
+height_from_origin = true
+
+[node name="Shard5" parent="Rocks" unique_id=1870611184 instance=ExtResource("22")]
+transform = Transform3D(-0.15990324, -0.37957132, -0.80022275, 0.4701926, 0.652728, -0.40356532, 0.7505663, -0.48976701, 0.08233145, -52.295624, 108.165184, -71.05536)
+height_from_origin = true
+
+[node name="BoulderB7" parent="Rocks" unique_id=845389868 instance=ExtResource("21")]
+transform = Transform3D(0.51715267, 0.04816783, 0.46928987, -0.1270715, 0.68482774, 0.06974091, -0.45431918, -0.13671438, 0.5146875, -66.22278, 92.635826, -71.42132)
+height_from_origin = true
+
+[node name="BoulderA9" parent="Rocks" unique_id=1274688631 instance=ExtResource("20")]
+transform = Transform3D(-0.76330274, 0.1204803, -0.20701073, 0.1378188, 0.78642106, -0.0504767, 0.19589518, -0.08382372, -0.77110225, -85.96382, 101.710434, -55.82839)
+height_from_origin = true
+
+[node name="Shard6" parent="Rocks" unique_id=1125917994 instance=ExtResource("22")]
+transform = Transform3D(0.844746, 0.05619311, -0.3053629, 0.0056651, 0.88220096, 0.17801501, 0.31043854, -0.16900821, 0.82768595, -79.323265, 107.27397, -38.020267)
+height_from_origin = true
+
+[node name="BoulderB8" parent="Rocks" unique_id=336639011 instance=ExtResource("21")]
+transform = Transform3D(-0.54827595, -0.0025924528, 0.83629346, -0.048526935, 0.9984089, -0.028719373, -0.8348884, -0.056328904, -0.54752934, -97.937744, 113.92914, -25.291374)
+height_from_origin = true
+
+[node name="BoulderA10" parent="Rocks" unique_id=1223048292 instance=ExtResource("20")]
+transform = Transform3D(0.82807285, -0.033266395, 0.86786455, 0.019537002, 1.1995295, 0.027338328, -0.8682821, -0.004735547, 0.8282898, -77.06611, 115.3973, -7.280098)
+height_from_origin = true
+
+[node name="Shard7" parent="Rocks" unique_id=950911160 instance=ExtResource("22")]
+transform = Transform3D(-0.9579467, -0.20802146, -0.49906436, -0.2619098, 1.0667853, 0.0580715, 0.47301307, 0.16939934, -0.97855127, -67.87706, 119.51066, -20.1738)
+height_from_origin = true
+
+[node name="BoulderA11" parent="Rocks" unique_id=430073444 instance=ExtResource("20")]
+transform = Transform3D(0.90931666, -0.10923964, -0.40150958, 0.03505987, 0.9816069, -0.18766642, 0.4146252, 0.15657131, 0.89642143, -54.150604, 128.57039, -36.723675)
+height_from_origin = true
+
+[node name="BoulderB9" parent="Rocks" unique_id=529052516 instance=ExtResource("21")]
+transform = Transform3D(-0.28143647, -0.07627012, 0.6363775, 0.07043136, 0.68713665, 0.11350172, -0.63705015, 0.109663524, -0.26859072, -61.837963, 128.87076, -47.037514)
+height_from_origin = true
+
+[node name="Shard8" parent="Rocks" unique_id=1487162500 instance=ExtResource("22")]
+transform = Transform3D(-0.51329046, -0.17015813, -0.7194297, -0.14572479, 0.8819399, -0.104624666, 0.7247738, 0.05681767, -0.5305417, -38.555576, 137.52974, -49.941536)
+height_from_origin = true
+
+[node name="BoulderA12" parent="Rocks" unique_id=1759585504 instance=ExtResource("20")]
+transform = Transform3D(1.0802255, -0.2030203, -0.04353951, 0.20244044, 1.0810571, -0.018263754, 0.04616055, 0.009922559, 1.0989863, -29.72063, 143.21387, -69.062546)
+height_from_origin = true
+
+[node name="BoulderB10" parent="Rocks" unique_id=234175296 instance=ExtResource("21")]
+transform = Transform3D(-0.30686364, -0.009341312, 0.7387473, -0.02570873, 0.7995866, -0.00056837575, -0.7383589, -0.023958333, -0.30700526, -4.761476, 151.14711, -72.48212)
+height_from_origin = true
+
+[node name="BoulderA13" parent="Rocks" unique_id=1997390241 instance=ExtResource("20")]
+transform = Transform3D(-0.08181904, 0.16639479, 0.9826588, -0.09993037, 0.9796263, -0.17420177, -0.9916247, -0.11245048, -0.063524194, -10.187189, 156.14606, -42.56478)
+height_from_origin = true
+
+[node name="Shard9" parent="Rocks" unique_id=888597373 instance=ExtResource("22")]
+transform = Transform3D(-0.45464438, 0.19145773, -1.0939116, 0.19799857, 1.1770684, 0.12372106, 1.0927466, -0.13361987, -0.4775465, -19.64848, 161.30975, -36.80273)
+height_from_origin = true
+
+[node name="BoulderB11" parent="Rocks" unique_id=258907426 instance=ExtResource("21")]
+transform = Transform3D(0.63257533, 0.05879825, 0.6374882, -0.16140376, 0.88189363, 0.078819074, -0.6195137, -0.16972443, 0.6303938, -40.28161, 167.0586, -35.160656)
+height_from_origin = true
+
+[node name="BoulderA14" parent="Rocks" unique_id=333556544 instance=ExtResource("20")]
+transform = Transform3D(-0.8665815, 0.059056737, -0.49552888, 0.1402568, 0.9817707, -0.12827463, 0.47892022, -0.18066171, -0.85906744, -35.6098, 175.49757, -12.857394)
+height_from_origin = true
+
+[node name="Shard10" parent="Rocks" unique_id=555052972 instance=ExtResource("22")]
+transform = Transform3D(0.77667326, -0.19137003, -0.01250252, 0.18299495, 0.723924, 0.28713572, -0.057372868, -0.28162313, 0.7465901, -37.899426, 179.85368, -4.7029047)
+height_from_origin = true
+
+[node name="BoulderB12" parent="Rocks" unique_id=2125884799 instance=ExtResource("21")]
+transform = Transform3D(-0.9609443, -0.1827391, 0.20782806, -0.20919141, 0.9713002, -0.113203086, -0.18117683, -0.1522577, -0.97159284, -40.20393, 186.34102, 17.118008)
+height_from_origin = true
+
+[node name="BoulderA15" parent="Rocks" unique_id=81033478 instance=ExtResource("20")]
+transform = Transform3D(0.18552557, -0.12649919, -1.1788037, 0.31397328, 1.1557913, -0.07461512, 1.1432415, -0.29689154, 0.21178849, -21.426743, 193.3661, 26.284452)
+height_from_origin = true
+
+[node name="Shard11" parent="Rocks" unique_id=1170220393 instance=ExtResource("22")]
+transform = Transform3D(0.018131547, -0.08625731, 0.79512954, -0.055455443, 0.7932841, 0.087321684, -0.7978697, -0.057096917, 0.012000038, -25.859455, 200.48512, 49.642353)
+height_from_origin = true
+
+[node name="BoulderB13" parent="Rocks" unique_id=1632726691 instance=ExtResource("21")]
+transform = Transform3D(0.50068164, -0.23587699, -0.70970404, 0.014710092, 0.8570049, -0.27445617, 0.74773085, 0.14108373, 0.4806182, -9.189081, 207.642, 42.32368)
+height_from_origin = true
+
+[node name="BoulderA16" parent="Rocks" unique_id=124957857 instance=ExtResource("20")]
+transform = Transform3D(-0.71401817, 0, 0.547885, 0.07703421, 0.8910594, 0.10039301, -0.5424423, 0.1265426, -0.7069252, 7, 214.5204, 30.476988)
+height_from_origin = true
+
+[node name="Vista" type="Node3D" parent="." unique_id=1544894334 node_paths=PackedStringArray("trail", "terrain", "world_environment", "wind")]
+script = ExtResource("23")
+ring_radii = PackedFloat32Array(720, 1250, 1900)
+trail = NodePath("../Trail")
+terrain = NodePath("../MountainTerrain")
+world_environment = NodePath("../WorldEnvironment")
+wind = NodePath("../Wind")
+
+[node name="Ovoos" type="Node3D" parent="Vista" unique_id=575731232]
+
+[node name="Ovoo1" type="Node3D" parent="Vista/Ovoos" unique_id=1780010075]
+transform = Transform3D(0.9396926, 0, 0.34202012, 0, 1, 0, -0.34202012, 0, 0.9396926, -14, 219.9, -4.5)
+
+[node name="Cairn" parent="Vista/Ovoos/Ovoo1" unique_id=1748704636 instance=ExtResource("18")]
+transform = Transform3D(2.3, 0, 0, 0, 2.3, 0, 0, 0, 2.3, 0, 0, 0)
+height_from_origin = true
+
+[node name="Khadag1" parent="Vista/Ovoos/Ovoo1" unique_id=991385108 instance=ExtResource("24")]
+transform = Transform3D(1.3277696, 0.08226181, 0.22969711, -0.056270394, 1.3399373, -0.15460163, -0.2374056, 0.14248164, 1.3213015, 0.86249995, 0.345, 1.4938937)
+height_from_origin = true
+
+[node name="Khadag2" parent="Vista/Ovoos/Ovoo1" unique_id=1074008321 instance=ExtResource("24")]
+transform = Transform3D(-0.7738717, 0.09386069, 0.9123118, -0.06420449, 1.1852261, -0.1764004, -0.91487736, -0.16257149, -0.75932217, 0.92, 0.345, -1.5934867)
+height_from_origin = true
+
+[node name="Khadag3" parent="Vista/Ovoos/Ovoo1" unique_id=1361058043 instance=ExtResource("24")]
+transform = Transform3D(-0.4945707, -0.14926365, -1.3548506, -0.026319196, 1.4420568, -0.14926367, 1.362794, -0.02631921, -0.4945708, -1.5855404, 0.345, -0.27957356)
+height_from_origin = true
+
+[node name="Ovoo2" type="Node3D" parent="Vista/Ovoos" unique_id=281910314]
+transform = Transform3D(0.81915206, 0, -0.57357645, 0, 1, 0, 0.57357645, 0, 0.81915206, 13, 219.9, -5.5)
+
+[node name="Cairn" parent="Vista/Ovoos/Ovoo2" unique_id=2091043422 instance=ExtResource("18")]
+transform = Transform3D(1.9, 0, 0, 0, 1.9, 0, 0, 0, 1.9, 0, 0, 0)
+height_from_origin = true
+
+[node name="Khadag1" parent="Vista/Ovoos/Ovoo2" unique_id=703517792 instance=ExtResource("24")]
+transform = Transform3D(0.62090254, 0.17132345, 1.0712742, -0.0595, 1.237835, -0.16347495, -1.0832543, 0.030208947, 0.6230149, 1.2162374, 0.285, 0.21445549)
+height_from_origin = true
+
+[node name="Khadag2" parent="Vista/Ovoos/Ovoo2" unique_id=61917760 instance=ExtResource("24")]
+transform = Transform3D(-1.0791296, -0.099847704, -0.38472033, -0.034676746, 1.1325289, -0.19666156, 0.39595056, -0.17294128, -1.065746, -0.66499996, 0.285, -1.1518137)
+height_from_origin = true
+
+[node name="Ovoo3" type="Node3D" parent="Vista/Ovoos" unique_id=481017316]
+transform = Transform3D(0.34202015, 0, 0.9396926, 0, 1, 0, -0.9396926, 0, 0.34202015, 2.5, 219.9, -10)
+
+[node name="Cairn" parent="Vista/Ovoos/Ovoo3" unique_id=88140581 instance=ExtResource("18")]
+transform = Transform3D(2.1, 0, 0, 0, 2.1, 0, 0, 0, 2.1, 0, 0, 0)
+height_from_origin = true
+
+[node name="Khadag1" parent="Vista/Ovoos/Ovoo3" unique_id=1393884950 instance=ExtResource("24")]
+transform = Transform3D(1.4, 0, 0, 0, 1.3946726, -0.12201803, 0, 0.12201803, 1.3946726, 0, 0.315, 1.4699999)
+height_from_origin = true
+
+[node name="Khadag2" parent="Vista/Ovoos/Ovoo3" unique_id=1422090543 instance=ExtResource("24")]
+transform = Transform3D(-0.2070951, 0.18700705, 1.1671076, 0.016361, 1.1852261, -0.18700704, -1.1818815, -0.016360996, -0.2070951, 1.5690066, 0.315, -0.13727029)
+height_from_origin = true
+
+[node name="Khadag3" parent="Vista/Ovoos/Ovoo3" unique_id=380733924 instance=ExtResource("24")]
+transform = Transform3D(-1.2800314, -0.013808098, 0.22655854, -0.04100476, 1.2903099, -0.15303177, -0.22324438, -0.15782727, -1.2709258, -0.12811893, 0.315, -1.4644063)
+height_from_origin = true
+
+[node name="Khadag4" parent="Vista/Ovoos/Ovoo3" unique_id=1228237473 instance=ExtResource("24")]
+transform = Transform3D(0.372766, -0.2067012, -1.0140612, 0.03644699, 1.0797899, -0.20670119, 1.0342714, 0.036447003, 0.372766, -1.4890293, 0.315, 0.26255605)
+height_from_origin = true
+
+[node name="Grass" type="Node3D" parent="." unique_id=1519148587]
+
+[node name="Lower" type="Node3D" parent="Grass" unique_id=1008543875]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 94, 24, -60)
+script = ExtResource("grass_script")
+extent = Vector2(160, 144)
+mask = ExtResource("mask_lower")
+blades_per_m2 = 40.0
+min_height = 0.2
+max_height = 0.7
+ray_above = 49.0
+ray_below = 49.0
+base_color = Color(0.15, 0.14, 0.09, 1)
+tip_color = Color(0.46, 0.41, 0.25, 1)
+
+[node name="Middle" type="Node3D" parent="Grass" unique_id=1855307122]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -27, 81, -66)
+script = ExtResource("grass_script")
+extent = Vector2(176, 128)
+mask = ExtResource("mask_middle")
+blades_per_m2 = 40.0
+min_height = 0.2
+max_height = 0.7
+ray_above = 59.0
+ray_below = 59.0
+base_color = Color(0.15, 0.14, 0.09, 1)
+tip_color = Color(0.46, 0.41, 0.25, 1)
+
+[node name="Switchback" type="Node3D" parent="Grass" unique_id=2135090938]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -46, 134, -39)
+script = ExtResource("grass_script")
+extent = Vector2(144, 96)
+mask = ExtResource("mask_switchback")
+blades_per_m2 = 40.0
+min_height = 0.2
+max_height = 0.7
+ray_above = 46.0
+ray_below = 46.0
+base_color = Color(0.15, 0.14, 0.09, 1)
+tip_color = Color(0.46, 0.41, 0.25, 1)
+
+[node name="Upper" type="Node3D" parent="Grass" unique_id=881206237]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -21, 187, 0)
+script = ExtResource("grass_script")
+extent = Vector2(80, 144)
+mask = ExtResource("mask_upper")
+blades_per_m2 = 40.0
+min_height = 0.2
+max_height = 0.7
+ray_above = 58.0
+ray_below = 58.0
+base_color = Color(0.15, 0.14, 0.09, 1)
+tip_color = Color(0.58, 0.52, 0.33, 1)
+
+[node name="Summit" type="Node3D" parent="Grass" unique_id=156731676]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 220, 0)
+script = ExtResource("grass_script")
+extent = Vector2(48, 32)
+mask = ExtResource("mask_summit")
+blades_per_m2 = 26.0
+min_height = 0.3
+max_height = 0.85
+ray_above = 8.0
+ray_below = 8.0
+base_color = Color(0.32, 0.23, 0.09, 1)
+tip_color = Color(0.86, 0.67, 0.3, 1)

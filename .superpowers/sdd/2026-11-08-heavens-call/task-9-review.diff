@@ -1,0 +1,332 @@
+# HC Task 9 review package (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd	2026-11-08 18:36:20.162152900 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 18:37:35.348260100 +0800
+@@ -1,19 +1,27 @@
+ class_name HeavensCall
+ extends Node3D
+ ## "Heavens call": a tired girl climbs a foggy mountain trail to a summit reveal. This root owns
+ ## the level's state and its reset; the trail, mood, sound, vista and summit systems hook in here.
+ 
+ ## Seconds the screen takes to fade in from black at the start.
+ const FADE_IN_SECONDS := 3.0
+ ## She is put back on the trail when she falls this far below the stretch she is over.
+ const FALL_DEPTH := 15.0
++## The named capture views: trail progress, or -1 for the end of PULLBACK.
++const VIEWS := {"foot": 0.02, "debris": 0.42, "eerie": 0.72, "summit": 0.96, "wide": -1.0}
++## Profile-only: REVEAL when the vista's `reveal` is about 0.15 (the far ridges fading in).
++const REVEAL_EARLY := "reveal_early"
++## Seconds into REVEAL at which the vista's reveal is 0.15 (ease_in_out(t / 8) = 0.15).
++const REVEAL_EARLY_SECONDS := 2.03
++const SETTLE_FRAMES := 30
++const PROFILE_FRAMES := 120
+ ## Metres walked on the floor per footstep (suits 2 m/s).
+ const STRIDE := 0.85
+ 
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var wind: Wind = $Wind
+ @onready var trail: Trail = $Trail
+ @onready var terrain: MountainTerrain = $MountainTerrain
+ @onready var mood: MoodDirector = $MoodDirector
+ @onready var storm: Storm = $Storm
+@@ -34,20 +42,21 @@
+ var _stride_walked := 0.0
+ var _last_pos := Vector3.ZERO
+ var _thunder_gen := 0
+ var _thunder_pending := 0
+ 
+ 
+ func _ready() -> void:
+ 	soundscape.attach_footsteps(player)
+ 	storm.flashed.connect(_on_flashed)
+ 	reset_scene()
++	_run_command_line.call_deferred()
+ 
+ 
+ func _process(_delta: float) -> void:
+ 	mood.apply(MoodDirector.sample(furthest_progress))
+ 
+ 
+ func _physics_process(_delta: float) -> void:
+ 	var pos := player.global_position
+ 	_count_stride(pos - _last_pos, player.is_on_floor())
+ 	_last_pos = pos
+@@ -136,10 +145,95 @@
+ 	follow_cam.yaw_deg = rad_to_deg(atan2(-dir.x, -dir.y))
+ 	follow_cam.snap()
+ 
+ 
+ func _restart_fade() -> void:
+ 	if _fade_tween:
+ 		_fade_tween.kill()
+ 	fade.color.a = 1.0
+ 	_fade_tween = create_tween()
+ 	_fade_tween.tween_property(fade, "color:a", 0.0, FADE_IN_SECONDS)
++
++
++## The named capture views, in order.
++func view_names() -> PackedStringArray:
++	return PackedStringArray(VIEWS.keys())
++
++
++## Puts the level in the named view (see VIEWS, plus REVEAL_EARLY), clear of the fade and title,
++## with the summit sequence frozen where it stands. Callers wait SETTLE_FRAMES to let it settle.
++func show_view(view_name: String) -> void:
++	reset_scene()
++	stop_fade()
++	fade.color.a = 0.0
++	if view_name == REVEAL_EARLY:
++		summit.skip_to(SummitSequence.Phase.REVEAL)
++		summit.scrub(REVEAL_EARLY_SECONDS)
++		vista.reveal = 0.15
++	elif VIEWS.get(view_name, -1.0) < 0.0:
++		summit.skip_to(SummitSequence.Phase.PULLBACK)
++		summit.scrub(SummitSequence.PULLBACK_SECONDS)
++	else:
++		place_on_trail(VIEWS[view_name])
++	follow_cam.snap()
++
++
++## Command line (after `--`): --capture-views, --profile, --quit.
++func _run_command_line() -> void:
++	var args := OS.get_cmdline_user_args()
++	if "--capture-views" in args or "--profile" in args:
++		storm.reset()
++		storm.set_process(false)  # no lightning: the frames stay deterministic
++		for node in get_tree().get_nodes_in_group("overlay"):
++			node.visible = false
++	if "--capture-views" in args:
++		await capture_views()
++	if "--profile" in args:
++		await profile_views()
++	if "--quit" in args:
++		get_tree().quit()
++
++
++func _settle() -> void:
++	for _f in SETTLE_FRAMES:
++		await get_tree().process_frame
++
++
++## Saves screenshots/heavens_<view>_<datetime>.png for each named view.
++func capture_views() -> void:
++	var dir := ProjectSettings.globalize_path("res://screenshots")
++	DirAccess.make_dir_recursive_absolute(dir)
++	var stamp := Time.get_datetime_string_from_system().replace(":", "-")
++	for v in view_names():
++		show_view(v)
++		await _settle()
++		await RenderingServer.frame_post_draw
++		var path := dir.path_join("heavens_%s_%s.png" % [v, stamp])
++		get_viewport().get_texture().get_image().save_png(path)
++		print("Saved ", path)
++
++
++## Measures each named view and REVEAL_EARLY (settle 30 frames, measure 120), prints the table and
++## writes screenshots/heavens_profile_<datetime>.md. Run with --disable-vsync.
++func profile_views() -> String:
++	var hud := PerfHud.new()
++	$UI.add_child(hud)
++	var rows: Array[Dictionary] = []
++	var names := view_names()
++	names.append(REVEAL_EARLY)
++	for v in names:
++		show_view(v)
++		await _settle()
++		var m: Dictionary = await hud.measure(PROFILE_FRAMES)
++		m["view"] = v
++		m["grass"] = true
++		rows.append(m)
++	hud.queue_free()
++	var text := PerfHud.table(rows)
++	print(text)
++	var dir := ProjectSettings.globalize_path("res://screenshots")
++	DirAccess.make_dir_recursive_absolute(dir)
++	var stamp := Time.get_datetime_string_from_system().replace(":", "-")
++	var file := FileAccess.open(dir.path_join("heavens_profile_%s.md" % stamp), FileAccess.WRITE)
++	if file:
++		file.store_string(text)
++	return text
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/summit_sequence.gd scripts/levels/summit_sequence.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/summit_sequence.gd	2026-11-08 18:36:20.161141600 +0800
++++ scripts/levels/summit_sequence.gd	2026-11-08 18:37:35.291373600 +0800
+@@ -112,20 +112,21 @@
+ 
+ 
+ ## Puts the scene at the start of phase `p`, from IDLE or any phase. From IDLE she is first put at
+ ## the summit if she isn't there yet. skip_to(IDLE) is the level's full reset_scene().
+ func skip_to(p: Phase) -> void:
+ 	if p == Phase.IDLE:
+ 		level.reset_scene()
+ 		return
+ 	if phase == Phase.IDLE and level.trail.progress_at(level.player.global_position) < START_PROGRESS:
+ 		level.place_on_trail(SKIP_PROGRESS)
++	set_process(true)
+ 	if phase == Phase.IDLE:
+ 		_take_control()
+ 	_restore_accel()
+ 	clap_played = false
+ 	input_armed = false
+ 	var opened := p >= Phase.PULLBACK
+ 	level.vista.reveal = 1.0 if opened else 0.0
+ 	level.mood.wind_surge = 1.0 if opened else 0.0
+ 	level.stop_fade()
+ 	level.fade.color.a = 1.0 if p == Phase.TITLE else 0.0
+@@ -143,40 +144,49 @@
+ 		_place_pull(0.0)
+ 	elif p > Phase.PULLBACK:
+ 		_place_pull(1.0)
+ 	phase = p
+ 	_t = 0.0
+ 
+ 
+ ## Back to IDLE: gameplay camera, control and orbit given back, surge off, title hidden. (The
+ ## level's reset_scene calls this and also closes the vista and restarts the fade-in.)
+ func reset() -> void:
++	set_process(true)
+ 	phase = Phase.IDLE
+ 	_t = 0.0
+ 	input_armed = false
+ 	clap_played = false
+ 	_restore_accel()
+ 	if level == null:
+ 		return
+ 	level.player.input_enabled = true
+ 	level.follow_cam.input_enabled = true
+ 	level.follow_cam.orbit_locked = false
+ 	if _cam_saved:
+ 		level.follow_cam.pitch_deg = _cam_pitch0
+ 		level.follow_cam.distance = _cam_dist0
+ 		_cam_saved = false
+ 	level.follow_cam.make_current()
+ 	level.mood.wind_surge = 0.0
+ 	if title_label:
+ 		title_label.modulate.a = 0.0
+ 
+ 
++## Freezes the current phase `seconds` in (capture and profile views): the pose is placed and
++## nothing advances until skip_to() or reset() runs again.
++func scrub(seconds: float) -> void:
++	_t = seconds
++	_process(0.0)
++	set_process(false)
++
++
+ func _input(event: InputEvent) -> void:
+ 	if not input_armed:
+ 		return
+ 	var key: bool = event is InputEventKey and event.pressed and not event.echo
+ 	var button: bool = event is InputEventMouseButton and event.pressed
+ 	if key or button:
+ 		get_viewport().set_input_as_handled()
+ 		_finish()
+ 
+ 
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_basics.gd tests/test_heavens_basics.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_basics.gd	2026-11-08 18:36:20.211466000 +0800
++++ tests/test_heavens_basics.gd	2026-11-08 18:37:13.954823100 +0800
+@@ -24,10 +24,22 @@
+ 	lv.follow_cam.pitch_deg = 80.0
+ 	check_near(lv.follow_cam.pitch_deg, 45.0, 0.01, "pitch clamped to max_pitch")
+ 
+ 
+ func test_fades_in_from_black(lv) -> void:
+ 	var fade: ColorRect = lv.get_node("UI/Fade")
+ 	lv.reset_scene()
+ 	check(fade.color.a > 0.9, "starts black")
+ 	await seconds(3.3)
+ 	check(fade.color.a < 0.05, "faded in after 3 s")
++
++
++func test_views_exist(lv) -> void:
++	check(lv.view_names() == PackedStringArray(["foot", "debris", "eerie", "summit", "wide"]), "the five named views")
++	for v in lv.view_names():
++		lv.show_view(v)
++		await frames(2)
++		check(lv.player.is_inside_tree(), "show_view(%s) leaves the level running" % v)
++	lv.show_view("reveal_early")
++	await frames(2)
++	check(lv.vista.reveal > 0.1 and lv.vista.reveal < 0.2, "reveal_early is at reveal ~0.15")
++	lv.reset_scene()
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/docs/HEAVENS_CALL.md docs/HEAVENS_CALL.md
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/docs/HEAVENS_CALL.md	1970-01-01 08:00:00.000000000 +0800
++++ docs/HEAVENS_CALL.md	2026-11-08 18:38:37.909282900 +0800
+@@ -0,0 +1,76 @@
++# Heavens call
++
++A 5-7 minute walking level: a tired cloaked girl climbs a foggy mountain trail (about 700 m at
++2 m/s, no sprint, no lantern) to a summit reveal and the title. Mood follows her furthest trail
++progress, never time.
++
++## How to run
++
++- Editor: open `scenes/levels/heavens_call.tscn` and press F6.
++- Command line, from the project root:
++
++```bash
++GODOT=/d/softwares/Godot_v4.6-stable_mono_win64/Godot_v4.6-stable_mono_win64_console.exe
++"$GODOT" --path . res://scenes/levels/heavens_call.tscn
++```
++
++WASD walks, the mouse orbits the camera. After the title, any key or mouse button quits.
++
++## Capture and profile
++
++Flags go after `--`. Lightning is switched off and the overlays (fade, title) are hidden while
++capturing or profiling, so frames are repeatable.
++
++```bash
++# PNGs: screenshots/heavens_<view>_<datetime>.png
++"$GODOT" --path . res://scenes/levels/heavens_call.tscn -- --capture-views --quit
++
++# GPU profile (120 frames per view after 30 settle frames):
++# screenshots/heavens_profile_<datetime>.md
++"$GODOT" --path . --resolution 1920x1080 --disable-vsync res://scenes/levels/heavens_call.tscn \
++    -- --no-wireframes --profile --quit
++```
++
++`--no-wireframes` skips the debug wireframe autoload (see `scripts/debug/debug_boot.gd`).
++`HeavensCall.view_names()` and `show_view(name)` are the same views from code.
++
++## Views
++
++| View | Where |
++|---|---|
++| foot | trail progress 0.02 |
++| debris | progress 0.42 |
++| eerie | progress 0.72 |
++| summit | progress 0.96 |
++| wide | the summit sequence at the end of PULLBACK (vista fully open) |
++| reveal_early | profile only: REVEAL with the vista's `reveal` at 0.15, when the far ridges and steppe draw as transparent while fading in |
++
++## Profile (1920x1080, RTX 3070, vsync off, `--no-wireframes`)
++
++Budget: 7.0 ms GPU in the worst view. The Grass column is always "on" (the level has no grass
++toggle). The FPS column is a stale 1 s monitor; trust the milliseconds.
++
++| View | FPS | CPU ms | GPU ms | Draws | Prims |
++|---|---:|---:|---:|---:|---:|
++| foot | 103 | 0.17 | 1.60 | 49 | 587k |
++| debris | 103 | 0.22 | 1.51 | 184 | 601k |
++| eerie | 377 | 0.21 | 1.44 | 162 | 602k |
++| summit | 377 | 0.19 | 1.48 | 95 | 663k |
++| wide | 377 | 0.20 | 1.72 | 62 | 606k |
++| reveal_early | 401 | 0.20 | 2.04 | 67 | 685k |
++
++Worst view: reveal_early at 2.04 ms, about 5 ms under budget. No cost reductions were needed.
++
++## Audio
++
++All 15 `.ogg` files are shipped in `assets/audio/` (wind, strong wind, eerie ambience, 4 gravel and
++4 rock footsteps, 3 distant thunders, thunder clap). Sources and licences are in
++`assets/audio/CREDITS.md`. A missing file is silent, never an error.
++
++## Manual checks (for you)
++
++1. Play the whole climb once and time it. Target 5-7 minutes (the trail length / 2.0 m/s).
++2. Listen to the mix: wind, footsteps on gravel and rock, the eerie stretch, distant thunder
++   after the flashes, the clap at the reveal.
++3. Watch the summit reveal, the pull-back and the title `Heavens call`.
++4. Repaint the grass if you want a different look.
+# new/changed binary or audio files:

@@ -1,0 +1,59 @@
+# HC Task 8 review package (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_sound.gd tests/test_heavens_sound.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_sound.gd	2026-11-08 18:19:59.266619400 +0800
++++ tests/test_heavens_sound.gd	2026-11-08 18:31:39.145163300 +0800
+@@ -6,21 +6,21 @@
+ 
+ 
+ func test_missing_audio_is_silent(lv) -> void:
+ 	check(Soundscape.load_stream("definitely_missing") == null, "missing file -> null, no error")
+ 	lv.soundscape.play_thunder()
+ 	lv.soundscape.play_thunder(true)
+ 	lv.soundscape.step(true)
+ 	lv.soundscape.set_volumes(1.0, 1.0, 1.0)
+ 	check(true, "no engine errors with missing audio")  # the runner fails the test on any engine error
+ 	for p in lv.soundscape.loop_players():
+-		check(not p.playing, "a player without a stream is not playing")
++		check(p.playing == (p.stream != null), "a player plays exactly when it has a stream (missing file = silent)")
+ 
+ 
+ func test_footstep_kind_follows_ground(lv) -> void:
+ 	lv.soundscape.step(true)
+ 	check_eq(lv.soundscape.last_step_kind, "gravel", "on the trail = gravel")
+ 	lv.soundscape.step(false)
+ 	check_eq(lv.soundscape.last_step_kind, "rock", "off the trail = rock")
+ 
+ 
+ func test_volume_floor(lv) -> void:
+# new/changed binary or audio files:
+assets/audio/ambience_eerie_loop.ogg
+assets/audio/ambience_eerie_loop.ogg.import
+assets/audio/CREDITS.md
+assets/audio/footstep_gravel_1.ogg
+assets/audio/footstep_gravel_1.ogg.import
+assets/audio/footstep_gravel_2.ogg
+assets/audio/footstep_gravel_2.ogg.import
+assets/audio/footstep_gravel_3.ogg
+assets/audio/footstep_gravel_3.ogg.import
+assets/audio/footstep_gravel_4.ogg
+assets/audio/footstep_gravel_4.ogg.import
+assets/audio/footstep_rock_1.ogg
+assets/audio/footstep_rock_1.ogg.import
+assets/audio/footstep_rock_2.ogg
+assets/audio/footstep_rock_2.ogg.import
+assets/audio/footstep_rock_3.ogg
+assets/audio/footstep_rock_3.ogg.import
+assets/audio/footstep_rock_4.ogg
+assets/audio/footstep_rock_4.ogg.import
+assets/audio/thunder_clap.ogg
+assets/audio/thunder_clap.ogg.import
+assets/audio/thunder_distant_1.ogg
+assets/audio/thunder_distant_1.ogg.import
+assets/audio/thunder_distant_2.ogg
+assets/audio/thunder_distant_2.ogg.import
+assets/audio/thunder_distant_3.ogg
+assets/audio/thunder_distant_3.ogg.import
+assets/audio/wind_loop.ogg
+assets/audio/wind_loop.ogg.import
+assets/audio/wind_strong_loop.ogg
+assets/audio/wind_strong_loop.ogg.import

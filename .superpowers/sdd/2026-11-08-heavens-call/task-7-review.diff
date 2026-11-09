@@ -1,0 +1,921 @@
+# HC Task 7 review package (diff -ruN --strip-trailing-cr, snapshot -> current)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd scripts/levels/heavens_call.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/heavens_call.gd	2026-11-08 17:32:38.336035600 +0800
++++ scripts/levels/heavens_call.gd	2026-11-08 17:37:45.832055000 +0800
+@@ -13,21 +13,22 @@
+ @onready var player: Player = $Player
+ @onready var follow_cam: FollowCamera = $GameplayCamera
+ @onready var wind: Wind = $Wind
+ @onready var trail: Trail = $Trail
+ @onready var terrain: MountainTerrain = $MountainTerrain
+ @onready var mood: MoodDirector = $MoodDirector
+ @onready var storm: Storm = $Storm
+ @onready var mist: FogVolume = $Mist
+ @onready var soundscape: Soundscape = $Soundscape
+ @onready var vista: Vista = $Vista
+-@onready var _fade: ColorRect = $UI/Fade
++@onready var summit: SummitSequence = $SummitSequence
++@onready var fade: ColorRect = $UI/Fade
+ 
+ ## Furthest progress (0 = foot, 1 = summit) she has reached along the trail. It only ever
+ ## increases, so walking back down or falling never undoes the mood.
+ var furthest_progress := 0.0
+ 
+ ## Footsteps made since the last reset.
+ var step_count := 0
+ 
+ var _fade_tween: Tween
+ var _stride_walked := 0.0
+@@ -47,38 +48,56 @@
+ 
+ 
+ func _physics_process(_delta: float) -> void:
+ 	var pos := player.global_position
+ 	_count_stride(pos - _last_pos, player.is_on_floor())
+ 	_last_pos = pos
+ 	var progress := trail.progress_at(pos)
+ 	furthest_progress = maxf(furthest_progress, progress)
+ 	if pos.y < trail.point_at(progress).y - FALL_DEPTH:
+ 		respawn()
++	if summit.phase == SummitSequence.Phase.IDLE and furthest_progress >= SummitSequence.START_PROGRESS:
++		summit.start()
+ 
+ 
+ ## Puts the girl back at the trail start facing up the trail, restarts the fade-in from black,
+-## and resets the progress, the mood, the storm and the vista (closed: reveal 0).
++## and resets the progress, the mood, the storm, the vista (closed: reveal 0) and the summit
++## sequence (idle, gameplay camera current, control given back, title hidden).
+ func reset_scene() -> void:
+ 	furthest_progress = 0.0
+ 	_thunder_gen += 1
+ 	_thunder_pending = 0
+ 	_stride_walked = 0.0
+ 	step_count = 0
++	summit.reset()
+ 	storm.reset()
+ 	vista.reveal = 0.0
+ 	mood.apply(MoodDirector.sample(0.0))
+ 	_place_on_trail(0.0)
+ 	_last_pos = player.global_position
+ 	_restart_fade()
+ 
+ 
++## Puts her on the trail at `progress`, at rest facing up it, counting it as reached.
++func place_on_trail(progress: float) -> void:
++	_place_on_trail(progress)
++	_last_pos = player.global_position
++	furthest_progress = maxf(furthest_progress, progress)
++
++
++## Stops the start's fade-in where it is, so the summit sequence can own UI/Fade.
++func stop_fade() -> void:
++	if _fade_tween:
++		_fade_tween.kill()
++	_fade_tween = null
++
++
+ ## Thunder rolls still waiting for their flash's delay.
+ func pending_thunder() -> int:
+ 	return _thunder_pending
+ 
+ 
+ ## Adds `motion`'s horizontal length to the walked distance while on the floor, and makes a
+ ## footstep every STRIDE metres.
+ func _count_stride(motion: Vector3, on_floor: bool) -> void:
+ 	if not on_floor:
+ 		return
+@@ -113,13 +132,13 @@
+ 		ahead = trail.point_at(1.0) - trail.point_at(1.0 - 2.0 / trail.length())
+ 	var dir := Vector2(ahead.x, ahead.z).normalized()
+ 	player.get_node("Model").rotation.y = atan2(dir.x, dir.y)
+ 	follow_cam.yaw_deg = rad_to_deg(atan2(-dir.x, -dir.y))
+ 	follow_cam.snap()
+ 
+ 
+ func _restart_fade() -> void:
+ 	if _fade_tween:
+ 		_fade_tween.kill()
+-	_fade.color.a = 1.0
++	fade.color.a = 1.0
+ 	_fade_tween = create_tween()
+-	_fade_tween.tween_property(_fade, "color:a", 0.0, FADE_IN_SECONDS)
++	_fade_tween.tween_property(fade, "color:a", 0.0, FADE_IN_SECONDS)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/mood_director.gd scripts/levels/mood_director.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/mood_director.gd	2026-11-08 17:32:38.330732600 +0800
++++ scripts/levels/mood_director.gd	2026-11-08 17:37:32.619360800 +0800
+@@ -73,38 +73,45 @@
+ ## 150 * deg_to_rad(wind_swing_deg) * TAU / SWING_PERIOD m/s at most: 0.5-0.8 m/s with these keys,
+ ## under a fifth of their own downwind travel (Wind.GUST_SPEED * strength, 2.8-5.8 m/s).
+ const SWING_PERIOD := 120.0
+ ## Mist noise drift in noise-space units per second at wind 1.0 (as in the playground).
+ const MIST_DRIFT := 0.05
+ ## The volumetric fog density per unit of depth-fog density (the playground's 0.004 / 0.009).
+ const VOLUMETRIC_RATIO := 0.45
+ ## The mist is thickest from this far below her feet and thins out over the shader's mist_height,
+ ## so it pools in the drops and hollows around her and only wisps about her ankles.
+ const MIST_BASE_BELOW := 4.0
++## Wind strength added at full wind_surge (the SUMMIT key's 1.45 rises to 1.8).
++const SURGE_STRENGTH := 0.35
+ 
+ @export var wind: Wind
+ @export var sun: DirectionalLight3D
+ @export var world_environment: WorldEnvironment
+ ## A FogVolume with the ground_mist shader; it is kept centred on `follow`.
+ @export var mist: FogVolume
+ @export var storm: Storm
+ ## Who the mist follows (the girl).
+ @export var follow: Node3D
+ ## The Soundscape (Task 4). Optional: without it the mood is silent.
+ @export var soundscape: Node
+ ## The summit Vista (Task 6). Optional. Its `reveal` opens the view on top of the mood: the fog
+ ## is scaled by vista.fog_scale() and the ground mist by vista.mist_scale() (both 1 at reveal 0),
+ ## and its sky colours by vista.horizon_tint()/zenith_tint() (identity at reveal 0), so the mood
+ ## keeps driving everything and `current` stays the mood's own values.
+ @export var vista: Vista
+ 
+-## The mood applied last.
++## The summit sequence's wind surge (0..1, Task 7), composed on top of the mood in every apply():
++## wind_strong's volume rises from the mood's value toward 1 and the wind's strength by
++## SURGE_STRENGTH, so the surge is never overwritten by the next frame's mood.
++var wind_surge := 0.0
++
++## The mood applied last (the mood's own values, without the surge).
+ var current: Dictionary = {}
+ 
+ var _time := 0.0
+ var _mist_offset := Vector3.ZERO
+ var _base_direction := 0.0
+ 
+ 
+ func _ready() -> void:
+ 	if wind:
+ 		_base_direction = wind.direction_degrees
+@@ -145,21 +152,21 @@
+ 		var g := smoothstep(a.at, a.at + GATE_RAMP, p)
+ 		for key: String in GATED:
+ 			out[key] = lerpf(before[key], a[key], g)
+ 	return out
+ 
+ 
+ ## Drives every system from `mood` (a `sample()` result) and remembers it as `current`.
+ func apply(mood: Dictionary) -> void:
+ 	current = mood
+ 	if wind:
+-		wind.strength = mood.wind
++		wind.strength = mood.wind + SURGE_STRENGTH * wind_surge
+ 		var swing := sin(_time * TAU / SWING_PERIOD)
+ 		wind.direction_degrees = fposmod(_base_direction + mood.wind_swing_deg * swing, 360.0)
+ 	if sun:
+ 		sun.light_energy = mood.sun_energy
+ 		sun.light_color = mood.sun_color
+ 	var open_fog := vista.fog_scale() if vista else 1.0
+ 	var open_mist := vista.mist_scale() if vista else 1.0
+ 	var sky_color: Color = vista.horizon_tint(mood.sky_color) if vista else mood.sky_color
+ 	var zenith_color: Color = vista.zenith_tint(mood.zenith_color) if vista else mood.zenith_color
+ 	var env: Environment = world_environment.environment if world_environment else null
+@@ -174,17 +181,18 @@
+ 		if env.sky and env.sky.sky_material is ShaderMaterial:
+ 			sky = env.sky.sky_material
+ 			sky.set_shader_parameter("horizon_color", sky_color)
+ 			sky.set_shader_parameter("zenith_color", zenith_color)
+ 	if mist:
+ 		mist.material.set_shader_parameter("density", mood.mist * open_mist)
+ 	if storm:
+ 		storm.rate_per_min = mood.lightning_per_min
+ 		storm.light(sun, env, sky)
+ 	if soundscape and soundscape.has_method("set_volumes"):
+-		soundscape.set_volumes(mood.vol_wind, mood.vol_wind_strong, mood.vol_eerie)
++		var strong := lerpf(mood.vol_wind_strong, 1.0, wind_surge)
++		soundscape.set_volumes(mood.vol_wind, strong, mood.vol_eerie)
+ 
+ 
+ static func _mix(a: Variant, b: Variant, t: float) -> Variant:
+ 	if a is Color:
+ 		return (a as Color).lerp(b, t)
+ 	return lerpf(a, b, t)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/summit_sequence.gd scripts/levels/summit_sequence.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/summit_sequence.gd	1970-01-01 08:00:00.000000000 +0800
++++ scripts/levels/summit_sequence.gd	2026-11-08 17:53:35.564987800 +0800
+@@ -0,0 +1,296 @@
++class_name SummitSequence
++extends Node
++## The Heavens call ending. HeavensCall calls start() once, when her furthest progress reaches
++## START_PROGRESS; from then on the sequence owns her, the cameras, the reveal and the overlays:
++##
++## - SLOWING: control is taken away and she eases to a stop, turning to face the vista (-Z),
++##   while the gameplay camera swings round behind her to look the same way.
++## - REVEAL: the vista's `reveal` opens 0 -> 1 (the fog parts), the wind surges on top of the
++##   mood (MoodDirector.wind_surge) and the thunderclap sounds CLAP_AT seconds in.
++## - PULLBACK: SummitCamera takes over from the gameplay camera's exact transform and cranes back
++##   and up along an arc until she is a tiny silhouette above the ocean of mist.
++## - FADE: UI/Fade goes to black over the held end frame.
++## - TITLE: UI/Title fades in; once it is fully shown, any key or mouse button ends the level.
++##
++## Everything is driven per frame from the phase and the seconds spent in it, every move eased
++## in and out, so skip_to() can put the scene at the start of any phase and nothing ever pops.
++
++signal finished
++
++enum Phase { IDLE, SLOWING, REVEAL, PULLBACK, FADE, TITLE }
++
++const TITLE := "Heavens call"
++## Furthest trail progress that starts the sequence.
++const START_PROGRESS := 0.97
++
++## Phase lengths, seconds.
++const SLOWING_SECONDS := 2.0
++const REVEAL_SECONDS := 8.0
++const PULLBACK_SECONDS := 12.0
++const FADE_SECONDS := 4.0
++const TITLE_FADE_SECONDS := 2.0
++## Seconds into REVEAL that the thunderclap sounds.
++const CLAP_AT := 2.0
++## Seconds into REVEAL over which the wind surge rises 0 -> 1 (it then holds to the end).
++const SURGE_SECONDS := 5.0
++
++## The gameplay camera during SLOWING and REVEAL: looking along -Z (yaw 0), a little higher and
++## further back than on the climb (14 degrees, 7 m), so it sees past the summit's rim to where
++## the mist sea and the ridges open. The player's own pitch and distance come back on reset.
++const LOOK_YAW_DEG := 0.0
++const LOOK_PITCH_DEG := 16.0
++const LOOK_DISTANCE := 9.0
++## Where she faces at the end of SLOWING: the Model's yaw toward -Z (Player: atan2(dir.x, dir.z)).
++const FACE_YAW := PI
++
++## The pull-back's end frame, relative to her feet: the camera high behind her (+Z), looking
++## down past her across the mist sea toward the gap in the ridges (-Z). ARC_LIFT raises the
++## path's middle (a quadratic Bezier), so the crane rises a little ahead of travelling back.
++const PULL_END_OFFSET := Vector3(0.0, 48.0, 80.0)
++const PULL_END_LOOK := Vector3(0.0, -36.0, -300.0)
++const PULL_ARC_LIFT := 18.0
++## Where skip_to() puts her when she isn't at the summit yet (where a walk-in stops).
++const SKIP_PROGRESS := 0.975
++
++## The level root: player, cameras, vista, mood, soundscape, trail and fade come from it.
++@export var level: HeavensCall
++## The pull-back camera (separate from the gameplay camera).
++@export var summit_camera: Camera3D
++@export var title_label: Label
++## Test hook: false makes the final key only emit `finished`, without quitting.
++@export var quit_on_finish := true
++
++var phase := Phase.IDLE
++## True only once the title is fully shown: then any key or mouse button finishes.
++var input_armed := false
++## Whether this run's thunderclap has sounded.
++var clap_played := false
++
++var _t := 0.0  # seconds into the current phase
++var _start_speed := Vector3.ZERO  # her horizontal velocity when SLOWING began
++var _start_face := 0.0  # her Model's yaw when SLOWING began
++var _cam_yaw0 := 0.0  # gameplay camera orbit when SLOWING began
++var _cam_pitch0 := 0.0
++var _cam_dist0 := 0.0
++var _cam_saved := false  # whether pitch0/dist0 hold the player's own orbit (to give back)
++var _accel := -1.0  # her acceleration, saved while SLOWING drives her velocity
++var _pull_from := Transform3D.IDENTITY
++var _pull_look_from := Vector3.ZERO
++var _anchor := Vector3.ZERO  # her feet when PULLBACK began
++
++
++func _ready() -> void:
++	process_physics_priority = -10  # set her velocity before Player._physics_process moves her
++	if title_label:
++		title_label.text = TITLE
++		title_label.modulate.a = 0.0
++
++
++## The in-out ease every transition uses (sine in-out: zero speed at both ends).
++static func ease_in_out(t: float) -> float:
++	return 0.5 - 0.5 * cos(PI * clampf(t, 0.0, 1.0))
++
++
++## Begins the ending (once: ignored unless idle).
++func start() -> void:
++	if phase != Phase.IDLE:
++		return
++	_begin_slowing()
++
++
++## Puts the scene at the start of phase `p`, from IDLE or any phase. From IDLE she is first put at
++## the summit if she isn't there yet.
++func skip_to(p: Phase) -> void:
++	if p == Phase.IDLE:
++		reset()
++		return
++	if phase == Phase.IDLE and level.trail.progress_at(level.player.global_position) < START_PROGRESS:
++		level.place_on_trail(SKIP_PROGRESS)
++	if phase == Phase.IDLE:
++		_take_control()
++	_restore_accel()
++	clap_played = false
++	input_armed = false
++	var opened := p >= Phase.PULLBACK
++	level.vista.reveal = 1.0 if opened else 0.0
++	level.mood.wind_surge = 1.0 if opened else 0.0
++	level.stop_fade()
++	level.fade.color.a = 1.0 if p == Phase.TITLE else 0.0
++	title_label.modulate.a = 0.0
++	if p == Phase.SLOWING:
++		_begin_slowing()  # from her current motion and orbit, gameplay camera current
++		return
++	_settle_her()
++	level.follow_cam.yaw_deg = LOOK_YAW_DEG
++	level.follow_cam.pitch_deg = LOOK_PITCH_DEG
++	level.follow_cam.distance = LOOK_DISTANCE
++	level.follow_cam.snap()
++	if p == Phase.REVEAL:
++		level.follow_cam.make_current()
++	else:
++		_begin_pullback()
++		if p != Phase.PULLBACK:
++			_place_pull(1.0)
++	phase = p
++	_t = 0.0
++
++
++## Back to IDLE: gameplay camera, control and orbit given back, surge off, title hidden. (The
++## level's reset_scene also closes the vista and restarts the fade-in.)
++func reset() -> void:
++	phase = Phase.IDLE
++	_t = 0.0
++	input_armed = false
++	clap_played = false
++	_restore_accel()
++	if level == null:
++		return
++	level.player.input_enabled = true
++	level.follow_cam.input_enabled = true
++	if _cam_saved:
++		level.follow_cam.pitch_deg = _cam_pitch0
++		level.follow_cam.distance = _cam_dist0
++		_cam_saved = false
++	level.follow_cam.make_current()
++	level.mood.wind_surge = 0.0
++	if title_label:
++		title_label.modulate.a = 0.0
++
++
++func _input(event: InputEvent) -> void:
++	if not input_armed:
++		return
++	var key: bool = event is InputEventKey and event.pressed and not event.echo
++	var button: bool = event is InputEventMouseButton and event.pressed
++	if key or button:
++		get_viewport().set_input_as_handled()
++		_finish()
++
++
++func _finish() -> void:
++	input_armed = false
++	finished.emit()
++	if quit_on_finish:
++		get_tree().quit()
++
++
++func _physics_process(_delta: float) -> void:
++	if phase != Phase.SLOWING:
++		return
++	var v := _start_speed * (1.0 - ease_in_out(_t / SLOWING_SECONDS))
++	level.player.velocity.x = v.x
++	level.player.velocity.z = v.z
++
++
++func _process(delta: float) -> void:
++	if phase == Phase.IDLE:
++		return
++	_t += delta
++	match phase:
++		Phase.SLOWING:
++			var e := ease_in_out(_t / SLOWING_SECONDS)
++			var model: Node3D = level.player.get_node("Model")
++			model.rotation.y = lerp_angle(_start_face, FACE_YAW, e)
++			level.follow_cam.yaw_deg = rad_to_deg(lerp_angle(deg_to_rad(_cam_yaw0), deg_to_rad(LOOK_YAW_DEG), e))
++			level.follow_cam.pitch_deg = lerpf(_cam_pitch0, LOOK_PITCH_DEG, e)
++			level.follow_cam.distance = lerpf(_cam_dist0, LOOK_DISTANCE, e)
++			if _t >= SLOWING_SECONDS:
++				_settle_her()
++				_next(Phase.REVEAL)
++		Phase.REVEAL:
++			level.follow_cam.yaw_deg = LOOK_YAW_DEG  # held: a stray drag can't swing it away
++			level.follow_cam.pitch_deg = LOOK_PITCH_DEG
++			level.follow_cam.distance = LOOK_DISTANCE
++			level.vista.reveal = ease_in_out(_t / REVEAL_SECONDS)
++			level.mood.wind_surge = ease_in_out(_t / SURGE_SECONDS)
++			if not clap_played and _t >= CLAP_AT:
++				clap_played = true
++				level.soundscape.play_thunder(true)
++			if _t >= REVEAL_SECONDS:
++				level.vista.reveal = 1.0
++				level.mood.wind_surge = 1.0
++				_begin_pullback()
++				_next(Phase.PULLBACK)
++		Phase.PULLBACK:
++			_place_pull(ease_in_out(_t / PULLBACK_SECONDS))
++			if _t >= PULLBACK_SECONDS:
++				_place_pull(1.0)
++				_next(Phase.FADE)
++		Phase.FADE:
++			level.fade.color.a = ease_in_out(_t / FADE_SECONDS)
++			if _t >= FADE_SECONDS:
++				level.fade.color.a = 1.0
++				_next(Phase.TITLE)
++		Phase.TITLE:
++			title_label.modulate.a = ease_in_out(_t / TITLE_FADE_SECONDS)
++			if _t >= TITLE_FADE_SECONDS and not input_armed:
++				title_label.modulate.a = 1.0
++				input_armed = true
++
++
++func _next(p: Phase) -> void:
++	phase = p
++	_t = 0.0
++
++
++func _take_control() -> void:
++	level.player.input_enabled = false
++	level.follow_cam.input_enabled = false
++	if not _cam_saved:
++		_cam_pitch0 = level.follow_cam.pitch_deg
++		_cam_dist0 = level.follow_cam.distance
++		_cam_saved = true
++	_cam_yaw0 = level.follow_cam.yaw_deg
++
++
++func _begin_slowing() -> void:
++	_take_control()
++	var v: Vector3 = level.player.velocity
++	_start_speed = Vector3(v.x, 0.0, v.z)
++	_start_face = level.player.get_node("Model").rotation.y
++	if _accel < 0.0:
++		_accel = level.player.acceleration
++	level.player.acceleration = 0.0  # her own easing off; SLOWING sets her velocity instead
++	level.follow_cam.make_current()
++	clap_played = false
++	input_armed = false
++	_next(Phase.SLOWING)
++
++
++## At rest, facing the vista: SLOWING's end state.
++func _settle_her() -> void:
++	_restore_accel()
++	level.player.velocity.x = 0.0
++	level.player.velocity.z = 0.0
++	level.player.get_node("Model").rotation.y = FACE_YAW
++
++
++func _restore_accel() -> void:
++	if _accel >= 0.0 and level:
++		level.player.acceleration = _accel
++	_accel = -1.0
++
++
++## SummitCamera takes over from the gameplay camera's transform, looking at its pivot.
++func _begin_pullback() -> void:
++	var cam: FollowCamera = level.follow_cam
++	_anchor = level.player.global_position
++	_pull_from = cam.global_transform
++	_pull_look_from = _anchor + Vector3.UP * cam.height
++	summit_camera.fov = cam.fov
++	summit_camera.global_transform = _pull_from
++	summit_camera.make_current()
++
++
++## The pull-back at eased fraction `e`: position along the arc, aim from her to the end look.
++func _place_pull(e: float) -> void:
++	var p0 := _pull_from.origin
++	var p2 := _anchor + PULL_END_OFFSET
++	var p1 := (p0 + p2) * 0.5 + Vector3.UP * PULL_ARC_LIFT
++	var pos := p0.lerp(p1, e).lerp(p1.lerp(p2, e), e)
++	var look := _pull_look_from.lerp(_anchor + PULL_END_LOOK, e)
++	summit_camera.global_position = pos
++	if e <= 0.0:
++		summit_camera.global_transform = _pull_from
++	else:
++		summit_camera.look_at(look, Vector3.UP)
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/vista.gd scripts/levels/vista.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scripts/levels/vista.gd	2026-11-08 17:32:38.337779400 +0800
++++ scripts/levels/vista.gd	2026-11-08 17:50:03.576427500 +0800
+@@ -25,20 +25,23 @@
+ ## Mood fog left at reveal 1 (a fraction). Opened geometrically, pow(OPEN_FOG, reveal), so the
+ ## seen distance grows steadily rather than all at the end.
+ const OPEN_FOG := 0.08
+ ## Ground mist (the Mist FogVolume around her) left at reveal 1.
+ const OPEN_MIST := 0.12
+ ## Sky at full reveal (blended in by OPEN_TINT): the horizon cools to a blue-grey distance haze,
+ ## so the ridges fade bluer, and the zenith darkens toward storm.
+ const OPEN_HORIZON := Color(0.56, 0.6, 0.67)
+ const OPEN_ZENITH := Color(0.19, 0.22, 0.29)
+ const OPEN_TINT := 0.6
++## The far world fades in over reveal 0..FAR_FADE (see far_fade()) instead of popping in when
++## `far` starts drawing: the mood's fog alone doesn't hide the ridges and the cloud deck.
++const FAR_FADE := 0.3
+ ## Radius of the mist sea, past the steppe's edge; the camera must see this far.
+ const MIST_RADIUS := 4500.0
+ ## Heights of the mist layers above the steppe, and their optical depth closed / open.
+ const MIST_LAYERS := [
+ 	{"above": 30.0, "closed": 1.2, "open": 0.2},
+ 	{"above": 75.0, "closed": 0.9, "open": 0.09},
+ ]
+ ## Mist drift, noise-space units per second per unit of wind.
+ const MIST_DRIFT := 0.004
+ ## The cloud deck: height above the steppe, optical depth, noise scale, colour (stormy slate),
+@@ -98,20 +101,21 @@
+ 
+ ## Parent of everything generated far away; hidden while reveal is 0.
+ var far: Node3D
+ 
+ var _roll: FastNoiseLite
+ var _patch: FastNoiseLite
+ var _foot := PackedVector3Array()  # trail points low enough to need the dip
+ var _mist: Array[ShaderMaterial] = []
+ var _mist_offset := Vector2.ZERO
+ var _cloud: ShaderMaterial
++var _solids: Array[StandardMaterial3D] = []  # the steppe's and ridges' materials (far_fade)
+ var _rebuild_queued := false
+ var _noise_ready := false
+ 
+ 
+ func _ready() -> void:
+ 	rebuild()
+ 
+ 
+ func _process(delta: float) -> void:
+ 	if far == null or not far.visible:
+@@ -129,20 +133,25 @@
+ 		_cloud.set_shader_parameter("offset", _mist_offset * CLOUD.drift)
+ 		_cloud.set_shader_parameter("horizon_color", horizon)
+ 		_cloud.set_shader_parameter("color", CLOUD.color)
+ 
+ 
+ ## How much of the mood's fog is left (1 = all of it at reveal 0).
+ func fog_scale() -> float:
+ 	return pow(OPEN_FOG, reveal)
+ 
+ 
++## How far the far world has faded in: 0 at reveal 0, 1 from reveal FAR_FADE on (smoothstep).
++func far_fade() -> float:
++	return smoothstep(0.0, FAR_FADE, reveal)
++
++
+ ## How much of the mood's ground mist is left.
+ func mist_scale() -> float:
+ 	return lerpf(1.0, OPEN_MIST, reveal)
+ 
+ 
+ ## The mood's horizon (fog, background) colour as the reveal leaves it.
+ func horizon_tint(c: Color) -> Color:
+ 	return c.lerp(OPEN_HORIZON, OPEN_TINT * reveal)
+ 
+ 
+@@ -171,20 +180,21 @@
+ 
+ ## Regenerates the steppe, the ridges, the mist sea and the cloud deck.
+ func rebuild() -> void:
+ 	_rebuild_queued = false
+ 	if not is_inside_tree():
+ 		return
+ 	if is_instance_valid(far):
+ 		remove_child(far)
+ 		far.queue_free()
+ 	_mist.clear()
++	_solids.clear()
+ 	_noise_ready = false
+ 	_ensure_noise()
+ 	_find_foot()
+ 	far = Node3D.new()
+ 	far.name = "Far"
+ 	add_child(far, false, Node.INTERNAL_MODE_BACK)
+ 	far.add_child(_mesh_node("Steppe", _steppe_mesh()))
+ 	for i in mini(ring_radii.size(), RINGS.size()):
+ 		far.add_child(_mesh_node("Ridges%d" % (i + 1), _ring_mesh(i)))
+ 	var noise_tex := NoiseTexture2D.new()
+@@ -221,23 +231,32 @@
+ 	deck.position.y = steppe_y + CLOUD.above
+ 	deck.material_override = _cloud
+ 	far.add_child(deck)
+ 	_apply_reveal()
+ 	_process(0.0)
+ 
+ 
+ func _apply_reveal() -> void:
+ 	if far:
+ 		far.visible = reveal > 0.0
++	var fade := far_fade()
+ 	for i in _mist.size():
+ 		var layer: Dictionary = MIST_LAYERS[i]
+ 		_mist[i].set_shader_parameter("thickness", lerpf(layer.closed, layer.open, reveal))
++		_mist[i].set_shader_parameter("opacity", fade)
++	if _cloud:
++		_cloud.set_shader_parameter("opacity", fade)
++	# While fading the solids blend (a depth pre-pass keeps their own faces sorted; render_priority
++	# -1 draws them before the mist slabs); once fully in they are plain opaque again.
++	for m in _solids:
++		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_DEPTH_PRE_PASS if fade < 1.0 else BaseMaterial3D.TRANSPARENCY_DISABLED
++		m.albedo_color.a = fade
+ 
+ 
+ func _queue_rebuild() -> void:
+ 	if _rebuild_queued or not is_inside_tree():
+ 		return
+ 	_rebuild_queued = true
+ 	rebuild.call_deferred()
+ 
+ 
+ func _ensure_noise() -> void:
+@@ -289,20 +308,22 @@
+ 	arrays.resize(Mesh.ARRAY_MAX)
+ 	arrays[Mesh.ARRAY_VERTEX] = verts
+ 	arrays[Mesh.ARRAY_NORMAL] = normals
+ 	arrays[Mesh.ARRAY_COLOR] = cols
+ 	var mesh := ArrayMesh.new()
+ 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+ 	var mat := StandardMaterial3D.new()
+ 	mat.vertex_color_use_as_albedo = true
+ 	mat.vertex_color_is_srgb = true
+ 	mat.roughness = 1.0
++	mat.render_priority = -1
++	_solids.append(mat)
+ 	mesh.surface_set_material(0, mat)
+ 	return mesh
+ 
+ 
+ ## A grid of rows x columns (columns wrap around) as faceted quads, upward-facing.
+ func _grid(points: Array[PackedVector3Array], colors: Array[PackedColorArray]) -> ArrayMesh:
+ 	var verts := PackedVector3Array()
+ 	var cols := PackedColorArray()
+ 	for r in points.size() - 1:
+ 		var a := points[r]
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn scenes/levels/heavens_call.tscn
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/scenes/levels/heavens_call.tscn	2026-11-08 17:32:38.355232300 +0800
++++ scenes/levels/heavens_call.tscn	2026-11-08 17:37:57.697793100 +0800
+@@ -17,20 +17,21 @@
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_breastplate.tscn" id="15"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_spear_broken.tscn" id="16"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_scarf_worn.tscn" id="17"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_cairn.tscn" id="18"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_fire_ring.tscn" id="19"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_a.tscn" id="20"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_boulder_b.tscn" id="21"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/rock_shard.tscn" id="22"]
+ [ext_resource type="Script" path="res://scripts/levels/vista.gd" id="23"]
+ [ext_resource type="PackedScene" path="res://scenes/environment/kit/prop_khadag_post.tscn" id="24"]
++[ext_resource type="Script" path="res://scripts/levels/summit_sequence.gd" id="25"]
+ [ext_resource type="Script" path="res://scripts/environment/grass_field.gd" id="grass_script"]
+ [ext_resource type="Image" path="res://assets/grass/heavens_summit.res" id="mask_summit"]
+ [ext_resource type="Image" path="res://assets/grass/heavens_upper.res" id="mask_upper"]
+ [ext_resource type="Image" path="res://assets/grass/heavens_switchback.res" id="mask_switchback"]
+ [ext_resource type="Image" path="res://assets/grass/heavens_middle.res" id="mask_middle"]
+ [ext_resource type="Image" path="res://assets/grass/heavens_lower.res" id="mask_lower"]
+ 
+ [sub_resource type="ShaderMaterial" id="sky_material"]
+ shader = ExtResource("5")
+ shader_parameter/horizon_color = Color(0.6, 0.62, 0.63, 1)
+@@ -128,29 +129,50 @@
+ [node name="GameplayCamera" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
+ current = true
+ fov = 60.0
+ far = 5000.0
+ script = ExtResource("3")
+ target = NodePath("../Player")
+ min_pitch = -5.0
+ max_pitch = 45.0
+ collision_mask = 2
+ 
++[node name="SummitCamera" type="Camera3D" parent="."]
++fov = 60.0
++far = 5000.0
++
+ [node name="UI" type="CanvasLayer" parent="." groups=["overlay"]]
+ layer = 10
+ 
+ [node name="Fade" type="ColorRect" parent="UI"]
+ anchor_right = 1.0
+ anchor_bottom = 1.0
+ mouse_filter = 2
+ color = Color(0, 0, 0, 1)
+ 
++[node name="Title" type="Label" parent="UI"]
++modulate = Color(1, 1, 1, 0)
++anchor_right = 1.0
++anchor_bottom = 1.0
++mouse_filter = 2
++theme_override_colors/font_color = Color(0.88, 0.88, 0.86, 1)
++theme_override_font_sizes/font_size = 64
++text = "Heavens call"
++horizontal_alignment = 1
++vertical_alignment = 1
++
++[node name="SummitSequence" type="Node" parent="." node_paths=PackedStringArray("level", "summit_camera", "title_label")]
++script = ExtResource("25")
++level = NodePath("..")
++summit_camera = NodePath("../SummitCamera")
++title_label = NodePath("../UI/Title")
++
+ [node name="Mist" type="FogVolume" parent="."]
+ size = Vector3(110, 30, 110)
+ material = SubResource("mist_material")
+ 
+ [node name="Storm" type="Node" parent="."]
+ script = ExtResource("9")
+ 
+ [node name="Soundscape" type="Node" parent="."]
+ script = ExtResource("11")
+ 
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_summit.gd tests/test_heavens_summit.gd
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/tests/test_heavens_summit.gd	1970-01-01 08:00:00.000000000 +0800
++++ tests/test_heavens_summit.gd	2026-11-08 17:53:45.061921600 +0800
+@@ -0,0 +1,152 @@
++extends "res://tests/case.gd"
++## Heavens call summit sequence (Task 7): she slows to a stop at the summit, the fog parts, the
++## wind surges and the clap sounds, a separate camera pulls back until she is tiny, the screen
++## fades to black and the title shows; only then does a key quit.
++
++const SCENE := "res://scenes/levels/heavens_call.tscn"
++
++
++func test_reaching_summit_starts_sequence(lv) -> void:
++	lv.player.global_position = lv.trail.point_at(0.985)
++	await frames(3)
++	check(lv.summit.phase != SummitSequence.Phase.IDLE, "sequence started at the summit")
++	check(not lv.player.input_enabled, "player control taken away")
++
++
++func test_title_text(lv) -> void:
++	lv.summit.skip_to(SummitSequence.Phase.TITLE)
++	await seconds(2.2)
++	var title: Label = lv.get_node("UI/Title")
++	check_eq(title.text, "Heavens call", "exact title")
++	check(title.horizontal_alignment == HORIZONTAL_ALIGNMENT_CENTER, "centred")
++	check(lv.get_node("UI/Fade").color.a > 0.99, "behind the title is black")
++
++
++func test_input_ignored_until_title(lv) -> void:
++	var quit := [false]
++	lv.summit.finished.connect(func() -> void: quit[0] = true)
++	lv.summit.quit_on_finish = false  # test hook: don't actually quit the runner
++	lv.summit.skip_to(SummitSequence.Phase.REVEAL)
++	var key := InputEventKey.new()
++	key.keycode = KEY_SPACE
++	key.pressed = true
++	Input.parse_input_event(key)
++	await frames(2)
++	check(not quit[0], "keys during the reveal do nothing")
++	lv.summit.skip_to(SummitSequence.Phase.TITLE)
++	await seconds(2.2)
++	Input.parse_input_event(key)
++	await frames(2)
++	check(quit[0], "a key after the title finishes")
++	var release := InputEventKey.new()
++	release.keycode = KEY_SPACE
++	release.pressed = false
++	Input.parse_input_event(release)  # leave no key held for later tests
++	await frames(1)
++
++
++func test_pullback_makes_her_tiny(lv) -> void:
++	if not needs_window(): return
++	lv.summit.skip_to(SummitSequence.Phase.PULLBACK)
++	await seconds(12.5)
++	var cam: Camera3D = lv.get_viewport().get_camera_3d()
++	var top: Vector2 = cam.unproject_position(lv.player.global_position + Vector3.UP * 1.7)
++	var foot: Vector2 = cam.unproject_position(lv.player.global_position)
++	check(absf(foot.y - top.y) < lv.get_viewport().get_visible_rect().size.y * 0.03, "tiny silhouette")
++
++
++## She stays in the frame at the end of the pull-back (a tiny figure, not lost off-screen).
++func test_pullback_keeps_her_in_frame(lv) -> void:
++	lv.summit.skip_to(SummitSequence.Phase.FADE)
++	await frames(2)
++	var cam: Camera3D = lv.get_viewport().get_camera_3d()
++	check(cam == lv.summit.summit_camera, "the summit camera holds the end frame")
++	var her: Vector3 = lv.player.global_position + Vector3.UP * 0.85
++	check(not cam.is_position_behind(her), "she is in front of the camera")
++	var p := cam.unproject_position(her)
++	var size: Vector2 = lv.get_viewport().get_visible_rect().size
++	check(Rect2(Vector2.ZERO, size).grow(-size.y * 0.05).has_point(p), "she is inside the frame")
++	check(cam.global_position.y - lv.player.global_position.y >= 40.0, "high above her")
++
++
++## Her movement eases out over SLOWING: not snapped to a stop, but stopped by its end. Keys held
++## during the sequence don't move her.
++func test_slowing_is_gentle(lv) -> void:
++	lv.player.global_position = lv.trail.point_at(0.9) + Vector3.UP
++	await physics_frames(2)
++	lv.player.velocity = Vector3(0.0, 0.0, -2.0)
++	lv.summit.start()
++	Input.action_press("move_forward")
++	await seconds(0.5)
++	var mid := Vector2(lv.player.velocity.x, lv.player.velocity.z).length()
++	check(mid > 0.8 and mid < 2.0, "still easing to a stop after 0.5 s, got %.2f" % mid)
++	await seconds(SummitSequence.SLOWING_SECONDS)
++	Input.action_release("move_forward")
++	var end := Vector2(lv.player.velocity.x, lv.player.velocity.z).length()
++	check(end < 0.05, "stopped by the end of SLOWING, got %.2f" % end)
++	var yaw: float = lv.player.get_node("Model").rotation.y
++	check(absf(angle_difference(yaw, PI)) < 0.05, "she faces the vista (-Z)")
++
++
++## The reveal opens slowly from 0, with the clap 2 s in and the wind surging on top of the mood.
++func test_reveal_opens_slowly_with_clap_and_surge(lv) -> void:
++	lv.summit.skip_to(SummitSequence.Phase.REVEAL)
++	await frames(2)
++	check(lv.vista.reveal < 0.02, "reveal starts closed")
++	check(not lv.summit.clap_played, "no clap at the start")
++	await seconds(1.0)
++	check(lv.vista.reveal > 0.0 and lv.vista.reveal < 0.1, "opening slowly after 1 s, got %.3f" % lv.vista.reveal)
++	await seconds(1.3)
++	check(lv.summit.clap_played, "the clap sounds 2 s in")
++	lv.summit.skip_to(SummitSequence.Phase.PULLBACK)
++	await frames(2)
++	check_eq(lv.vista.reveal, 1.0, "fully open at the pull-back")
++	check_near(lv.soundscape.wind_strong_loop.volume_db, 0.0, 0.05, "wind_strong surged to 1")
++	check(lv.soundscape.wind_loop.volume_db < -1.0, "the mood still drives the other loops")
++
++
++func test_reset_returns_to_gameplay(lv) -> void:
++	lv.summit.skip_to(SummitSequence.Phase.TITLE)
++	await seconds(0.5)
++	lv.reset_scene()
++	await frames(2)
++	check_eq(lv.summit.phase, SummitSequence.Phase.IDLE, "sequence idle")
++	check(not lv.summit.input_armed, "input disarmed")
++	check(lv.get_viewport().get_camera_3d() == lv.follow_cam, "gameplay camera current")
++	check_eq(lv.vista.reveal, 0.0, "vista closed")
++	check(lv.player.input_enabled, "control given back")
++	check(lv.follow_cam.input_enabled, "camera orbit given back")
++	check_eq(lv.mood.wind_surge, 0.0, "no surge")
++	check_eq(lv.get_node("UI/Title").modulate.a, 0.0, "title hidden")
++	check(lv.get_node("UI/Fade").color.a > 0.5, "fading in from black again")
++
++
++## Anti-goal "a reveal that pops": the far world (ridges, steppe, mist sea, cloud deck) fades in
++## with the reveal's first quarter instead of appearing the moment it starts drawing.
++func test_far_world_fades_in(lv) -> void:
++	lv.vista.reveal = 0.01
++	check(lv.vista.far.visible, "drawn once revealing")
++	check(lv.vista.far_fade() < 0.02, "but barely there at reveal 0.01 (%.3f)" % lv.vista.far_fade())
++	lv.vista.reveal = 0.5
++	check_eq(lv.vista.far_fade(), 1.0, "fully in by half the reveal")
++	lv.vista.reveal = 0.0
++
++
++## skip_to() lands on a phase's start state from any other phase, backwards included.
++func test_skip_to_from_any_phase(lv) -> void:
++	lv.summit.skip_to(SummitSequence.Phase.TITLE)
++	await frames(2)
++	lv.summit.skip_to(SummitSequence.Phase.REVEAL)
++	await frames(2)
++	check(lv.get_viewport().get_camera_3d() == lv.follow_cam, "REVEAL: gameplay camera")
++	check(lv.get_node("UI/Fade").color.a < 0.01, "REVEAL: no black")
++	check(lv.vista.reveal < 0.02, "REVEAL: closed")
++	lv.summit.skip_to(SummitSequence.Phase.FADE)
++	await frames(2)
++	check(lv.get_viewport().get_camera_3d() == lv.summit.summit_camera, "FADE: summit camera")
++	lv.summit.skip_to(SummitSequence.Phase.SLOWING)
++	await frames(2)
++	check_eq(lv.summit.phase, SummitSequence.Phase.SLOWING, "back to SLOWING")
++	check(lv.get_viewport().get_camera_3d() == lv.follow_cam, "SLOWING: gameplay camera")
++	check_eq(lv.vista.reveal, 0.0, "SLOWING: closed")
++	check(not lv.player.input_enabled, "SLOWING: no control")
+diff -ruN -U10 --strip-trailing-cr -x '*.uid' -x '*.import' -x '*.blend*' -x superpowers C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/assets/shaders/mist_sea.gdshader assets/shaders/mist_sea.gdshader
+--- C:/Users/user/AppData/Local/Temp/claude/d595467b469acd6b/50fe8da1-f185-4552-92de-73eb6f745a9c/scratchpad/hc/snap/assets/shaders/mist_sea.gdshader	2026-11-08 17:32:38.499084000 +0800
++++ assets/shaders/mist_sea.gdshader	2026-11-08 17:49:57.567462500 +0800
+@@ -15,20 +15,22 @@
+ uniform sampler2D noise_tex : repeat_enable, filter_linear_mipmap;
+ uniform float noise_scale = 0.0012;
+ uniform vec2 offset = vec2(0.0);
+ // Distance (m) over which the mist's own colour gives way to the horizon colour.
+ uniform vec2 horizon_fade = vec2(900.0, 4000.0);
+ // Optical depth range from thin gaps to thick banks.
+ uniform vec2 banks_range = vec2(0.08, 2.2);
+ // The layer fades out between these radii from its centre (a cloud deck, whose rim would
+ // otherwise cut a line across the sky).
+ uniform vec2 rim_fade = vec2(1e6, 2e6);
++// Overall opacity: the vista fades the whole layer in with it (Vista.far_fade).
++uniform float opacity = 1.0;
+ uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
+ 
+ varying vec3 world_pos;
+ varying float rim;
+ 
+ void vertex() {
+ 	world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+ 	rim = length(VERTEX.xz);
+ }
+ 
+@@ -41,12 +43,12 @@
+ 	float banks = mix(banks_range.x, banks_range.y, smoothstep(0.38, 0.7, n));
+ 	float tau = thickness * banks / max(cos_view, 0.01);
+ 	float alpha = 1.0 - exp(-tau);
+ 	// Soft where it meets the ground: compare the scene's depth behind this fragment to its own.
+ 	float depth = texture(depth_tex, SCREEN_UV).r;
+ 	vec4 view = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, depth, 1.0);
+ 	float scene_z = -view.z / view.w;
+ 	alpha *= clamp((scene_z + VERTEX.z) / soft, 0.0, 1.0);
+ 	ALBEDO = mix(color.rgb, horizon_color.rgb, smoothstep(horizon_fade.x, horizon_fade.y, dist));
+ 	alpha *= 1.0 - smoothstep(rim_fade.x, rim_fade.y, rim);
+-	ALPHA = clamp(alpha, 0.0, 1.0);
++	ALPHA = clamp(alpha, 0.0, 1.0) * opacity;
+ }
+# new/changed binary or audio files:
