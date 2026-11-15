@@ -1,0 +1,67 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://scripts/replica/replica_site.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="2"]
+[ext_resource type="Script" uid="uid://0ocioxwqntjv" path="res://scripts/camera/follow_camera.gd" id="3"]
+[ext_resource type="Script" uid="uid://clu2xlfypwyfn" path="res://scripts/environment/wind.gd" id="4"]
+[ext_resource type="Shader" uid="uid://bv1q5vx48rmn4" path="res://assets/shaders/gradient_sky.gdshader" id="5"]
+
+[sub_resource type="ShaderMaterial" id="sky_material"]
+shader = ExtResource("5")
+shader_parameter/horizon_color = Color(0.72, 0.76, 0.8, 1)
+shader_parameter/zenith_color = Color(0.36, 0.5, 0.7, 1)
+shader_parameter/glow_size = 0.2
+shader_parameter/glow_energy = 0.5
+
+[sub_resource type="Sky" id="sky"]
+sky_material = SubResource("sky_material")
+
+[sub_resource type="Environment" id="environment"]
+background_mode = 2
+background_color = Color(0.72, 0.76, 0.8, 1)
+sky = SubResource("sky")
+ambient_light_source = 2
+ambient_light_color = Color(0.36, 0.5, 0.7, 1)
+ambient_light_energy = 0.45
+tonemap_mode = 4
+ssao_enabled = true
+glow_enabled = true
+glow_intensity = 0.4
+glow_bloom = 0.03
+fog_enabled = true
+fog_light_color = Color(0.72, 0.76, 0.8, 1)
+fog_sun_scatter = 0.1
+fog_density = 0.0001
+fog_aerial_perspective = 0.2
+fog_sky_affect = 0.3
+
+[node name="Sumber" type="Node3D" node_paths=PackedStringArray("player", "follow_camera", "sun")]
+script = ExtResource("1")
+player = NodePath("Player")
+follow_camera = NodePath("GameplayCamera")
+sun = NodePath("Sun")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("environment")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+light_color = Color(1, 0.93, 0.84, 1)
+light_energy = 1.6
+shadow_enabled = true
+directional_shadow_max_distance = 250.0
+
+[node name="Wind" type="Node" parent="."]
+script = ExtResource("4")
+
+[node name="Player" parent="." instance=ExtResource("2")]
+lantern = false
+
+[node name="GameplayCamera" type="Camera3D" parent="." node_paths=PackedStringArray("target")]
+current = true
+fov = 60.0
+far = 20000.0
+script = ExtResource("3")
+target = NodePath("../Player")
+min_pitch = -5.0
+max_pitch = 80.0
+collision_mask = 2

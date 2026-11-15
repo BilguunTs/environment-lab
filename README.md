@@ -23,6 +23,19 @@ Godot... --path . -- "--preset=Foggy Forest" --capture-views --quit
 Godot... --path . --resolution 1920x1080 --disable-vsync -- --profile-views --quit
 ```
 
+## Terrain replica
+
+`scenes/replica/sumber.tscn` is a 1:1 walkable replica of a real 2 × 2 km granite valley
+(Sümber, Mongolia), built from public elevation and imagery data by the pipeline in
+`tools/terrain/replica`. The guide [docs/TERRAIN_REPLICA.md](docs/TERRAIN_REPLICA.md) covers
+adding a site, the commands, the rock correction tool, the imagery licence rule (never commit
+imagery) and known limits.
+
+The build outputs (`*.r32`, `manifest.json`, `scatter.json`) are not committed, so on a fresh
+clone `sumber.tscn` has nothing to load (and its tests skip) until you run the pipeline's
+`fetch` and then `build` for `data/sites/sumber`, as described in
+[docs/TERRAIN_REPLICA.md](docs/TERRAIN_REPLICA.md).
+
 ## Heavens call
 
 `scenes/levels/heavens_call.tscn` is a 5-7 minute walking level built from this kit: a tired

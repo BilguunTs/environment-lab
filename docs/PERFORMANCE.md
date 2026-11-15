@@ -77,3 +77,86 @@ GODOT=/d/softwares/Godot_v4.6-stable_mono_win64/Godot_v4.6-stable_mono_win64_con
 ```
 
 It prints the table and writes `screenshots/profile_<datetime>.md`.
+
+## Terrain replica walk (Task 11)
+
+`--walk-perf` on a replica scene (`scripts/replica/replica_capture.gd`) times every frame of a
+scripted walk at sprint speed (7 m/s):
+
+1. From the spawn, 15 m south of the gers, to the site centre.
+2. Across the valley to 4 m outside the outline of the largest tor (largest outline area).
+3. A 5 s rise to 350 m above that point, looking at the centre, then a 5 s hold.
+
+1 %-low is the mean fps of the slowest 1 % of frames.
+
+```bash
+"$GODOT" --path . --fullscreen --resolution 1920x1080 --disable-vsync res://scenes/replica/sumber.tscn -- --walk-perf --quit
+```
+
+Use `--fullscreen`. In a window, the taskbar clips the viewport to 1920x1061.
+
+Sumber, 1920x1080, RTX 3070, vsync off, after the grass fix below and before the Ruling 28 gap
+pass. These are three runs of the whole walk, about 23k frames each:
+
+| Run | Min fps | 1 %-low fps | Avg fps | Frames < 60 fps |
+|---|---:|---:|---:|---:|
+| 1 | 68 | 88 | 252 | 0 |
+| 2 (`--print-fps`) | 40 | 81 | 270 | 12 |
+| 3 | 60 | 92 | 256 | 1 |
+
+Per leg in run 1:
+
+| Leg | Min fps | 1 %-low fps | Avg fps |
+|---|---:|---:|---:|
+| spawn -> centre | 81 | 101 | 273 |
+| centre -> tor | 68 | 86 | 244 |
+| aerial | 164 | 193 | 247 |
+
+**After Rulings 27–28** (dense mass fill, 46 k → 310 k fill pieces). The walk is judged on
+the 1 %-low (Ruling 30). Single-frame minima are reported, not gated.
+
+| Run | Min fps | 1 %-low fps | Avg fps | Frames < 60 fps (of ~9.7k) |
+|---|---:|---:|---:|---:|
+| 1 | 75 | 77 | 111 | 0 |
+| 2 | 36 | 74 | 107 | 1 |
+| 3 | 70 | 75 | 107 | 0 |
+
+Per leg in run 3:
+
+| Leg | Min fps | 1 %-low fps | Avg fps |
+|---|---:|---:|---:|
+| spawn -> centre | 76 | 92 | 122 |
+| centre -> tor | 70 | 75 | 100 |
+| aerial | 77 | 77 | 106 |
+
+The 1 %-low passes in every run, but the headroom is much smaller. The average fell from about
+260 to about 108 fps. The cost is steady, not spiky. Apart from one 36 fps frame in run 2, the min and the 1 %-low
+are close in every leg. That points at the number of fill instances drawn, not at streaming. Smoke after the
+gap pass ran at min 59, 1 %-low 108 and average 415 fps, with 1 of 72k frames under 60.
+
+Before the gap pass, the second site (`smoke`, no gers, so the walk starts at the centre) ran at min 45, 1 %-low 93 and
+average 434 fps, with 7 of 75k frames under 60.
+
+**The grass fix.** Before it, the walk ran at min 25-29 and 1 %-low 52-58 fps, with about 150
+frames under 60. With grass streaming switched off, the same walk held min 200 and 1 %-low
+227 fps, so every dip came from building grass tiles. Two things caused it:
+
+- **Tiles were built in a batch.** `ReplicaGrass` adds at most one tile per frame, but `GrassField`
+  builds its blades in `_physics_process`. At 250+ fps, several tiles made between two physics
+  ticks were all built in the same tick. `ReplicaGrass` now builds each tile as it adds it.
+- **Tiles were too big.** One 16 m tile of dense grass still took over 1/60 s to build, so
+  `ReplicaGrass.TILE_M` went from 16 to 8.
+
+The remaining rare dips are single frames, and they vary from run to run.
+
+**After Ruling 34** (fill-piece collision only over 1.5 m on some axis: 310,495 → 168,404 fill
+hulls, plus 1,566 boulder hulls). Three runs, same walk:
+
+| Run | Min fps | 1 %-low fps | Avg fps | Frames < 60 fps |
+|---|---:|---:|---:|---:|
+| 1 | 68 | 78 | 112 | 0 |
+| 2 | 51 | 75 | 108 | 1 |
+| 3 | 41 | 75 | 107 | 1 |
+
+No change within run-to-run noise: the walk is bound by drawing the fill, not by collision. The
+site build (windowed) is 7.3–7.6 s, as before.

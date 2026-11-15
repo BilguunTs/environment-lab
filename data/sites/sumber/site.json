@@ -1,0 +1,44 @@
+{
+  "name": "sumber",
+  "lat": 46.252564,
+  "lon": 108.779433,
+  "core_m": 2000,
+  "core_step_m": 1.0,
+  "ring_m": 20000,
+  "ring_step_m": 30.0,
+  "ortho_m_per_px": 0.5,
+  "imagery_zoom": 17,
+  "rules": "steppe_granite",
+  "sun": {"azimuth_deg": 159.0, "elevation_deg": 28.5},
+  "sun_source": "Esri metadata: WorldView-2 2023-10-28, ~10:30 local solar; ger crown calibration under-reads (wall-top shadow)",
+  "calibration": [
+    {
+      "x": -127.52,
+      "z": -110.48,
+      "height_m": 2.4,
+      "shadow_tip_x": -129.45,
+      "shadow_tip_z": -116.04
+    },
+    {
+      "x": -117.78,
+      "z": -96.75,
+      "height_m": 2.4,
+      "shadow_tip_x": -120.04,
+      "shadow_tip_z": -101.97
+    }
+  ],
+  "structures": [
+    {
+      "type": "ger",
+      "x": -127.52,
+      "z": -110.48,
+      "diameter_m": 6.53
+    },
+    {
+      "type": "ger",
+      "x": -117.78,
+      "z": -96.75,
+      "diameter_m": 7.08
+    }
+  ]
+}

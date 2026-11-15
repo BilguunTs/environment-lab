@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/replica/sumber.tscn" id="1"]
+
+[node name="Smoke" instance=ExtResource("1")]
+site_dir = "res://data/sites/smoke"

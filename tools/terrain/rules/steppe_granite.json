@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "name": "steppe_granite",
+  "about": "Rule fill for granite tor steppe (Govisumber): what the 0.83 m/px photo cannot resolve (rocks < ~2 m, shrubs, grass). Densities are per 100 m2 by surface class (classify.CLASS_IDS names); a class not listed has 0. Sizes are [min, max] metres per axis, drawn uniformly; l >= w is enforced after the draw.",
+  "seed": 20261111,
+  "tile_m": 100.0,
+  "slope_smooth_m": 8.0,
+  "structure_clear_m": 2.0,
+
+  "scree_band_m": 12.0,
+  "scree_band_per_height": 1.5,
+  "scree_band_min_m": 2.0,
+  "scree_source_percentile": 90.0,
+  "downslope_bias": 0.9,
+  "downslope_full_deg": 8.0,
+  "stone_reach_m": 20.0,
+  "cluster_radius_m": 2.5,
+  "near_rock_band_m": 5.0,
+  "near_rock_boost": 2.5,
+  "channel_band_m": 3.0,
+  "channel_boost": 1.5,
+
+  "_why": {
+    "scree": "Granite tors shed blocks that roll and creep downslope: scree lies in a band below the rock edge, its width ~ scree_band_per_height x the source rock's height (thickness for DEM-topped masses), capped at scree_band_m (a DEM-topped large mass counts as the scree_source_percentile of its thickness: its rim is ~0 thick by construction); density falls linearly across the band. downslope_bias = share of the weight that follows the fall line (cos of the angle to it); it reaches full strength at slopes >= downslope_full_deg (on flat ground scree rings the rock). Sizes stay below the ~2 m photo resolution limit (rocks >= 2 m are traced).",
+    "stone": "Small weathered stones and grus near rock: density at the rock edge, falling linearly to 0 at stone_reach_m. Nothing rocky far from traced rock (open sand stays open).",
+    "scrub": "Caragana-type shrubs: the dark speckled class (SCRUB) at 1-2 m crowns 2-4 m apart in the imagery; sparse on grass, rare on sand. Thicker at rock feet (moisture/shelter) and along dry channels.",
+    "tree": "None at this site (zero density); the type exists for other sites.",
+    "grass": "Relative density 0-1 for the GrassField mask; boosted at rock feet and along channels, none on track, under rock or at the gers.",
+    "fill_coverage": "Ruling 28: seen from above the fill must cover the mass outline (>= 85 %), as the class map shows solid rock there. A loose packing of 2-10 m pieces at overlap_frac leaves the gaps between round pieces and a ~1 m strip along the outline, so a gap pass packs the outline again over a 0.5 m candidate grid with 0.75-2 m pieces (below the 2 m photo resolution: these fill gaps, they are not traced rocks) overlapping up to gap.overlap_frac; 0.75 m (not 1 m) reaches the strip along the outline, which 1 m pieces left at 82 % coverage on the small masses of the smoke site. A slab is at least slab_reveal_m above the highest ground under it: a pavement sheet lies on the ground surface, and on a slope a slab based at the lowest ground was buried by the terrain upslope (35 % of slab area at Sumber).",
+    "fill": "Masses (outline polygons) are packed with pieces up to the mass top: ground + height, or the DEM top for masses >= 60 m long (Ruling 15). Where a large mass is < pavement_thickness_m thick it is flat sheet granite (Ruling 18): slabs. Thick parts are stacks of round pieces (Ruling 22: how granite tors stand): each piece at most max_h_over_l x its length high, each one up stack_shrink x the one below and turned by up to stack_turn_deg, resting on it (scatter y = base above the ground). fill_round sizes span the traced boulders' long axes (p5 3.5 m - p95 9.4 m) down to the 2 m resolution limit."
+  },
+
+  "types": {
+    "scree": {
+      "density_per_100m2": {"ROCK": 25.0, "SAND": 25.0, "GRASS": 25.0, "SCRUB": 25.0, "CHANNEL": 12.0},
+      "size_m": {"l": [0.4, 1.8], "h": [0.25, 1.1], "w": [0.3, 1.4]},
+      "cluster_size": 3
+    },
+    "stone": {
+      "density_per_100m2": {"ROCK": 30.0, "SAND": 6.0, "GRASS": 8.0, "SCRUB": 8.0, "CHANNEL": 10.0},
+      "size_m": {"l": [0.1, 0.4], "h": [0.06, 0.25], "w": [0.08, 0.3]},
+      "cluster_size": 4
+    },
+    "scrub": {
+      "density_per_100m2": {"ROCK": 2.0, "SAND": 0.2, "GRASS": 1.0, "SCRUB": 10.0, "CHANNEL": 3.0},
+      "size_m": {"l": [0.8, 2.0], "h": [0.4, 1.2], "w": [0.6, 1.6]},
+      "cluster_size": 3
+    },
+    "tree": {
+      "density_per_100m2": {},
+      "size_m": {"l": [3.0, 8.0], "h": [4.0, 12.0], "w": [3.0, 8.0]},
+      "cluster_size": 1
+    },
+    "grass": {
+      "density": {"ROCK": 0.25, "SAND": 0.12, "GRASS": 0.75, "SCRUB": 0.55, "CHANNEL": 0.6}
+    },
+    "fill_round": {
+      "size_m": {"l": [2.0, 8.0], "h": [0.5, 40.0], "w": [1.5, 8.0]},
+      "w_over_l": [0.6, 1.0],
+      "max_h_over_l": 1.6,
+      "stack_shrink": [0.9, 1.0],
+      "stack_turn_deg": 15.0,
+      "max_stack": 8
+    },
+    "fill_slab": {
+      "size_m": {"l": [3.0, 10.0], "h": [0.2, 2.0], "w": [2.0, 10.0]},
+      "w_over_l": [0.5, 1.0]
+    }
+  },
+
+  "fill": {
+    "pavement_thickness_m": 2.0,
+    "top_jitter_frac": 0.08,
+    "overlap_frac": 0.3,
+    "candidate_step_m": 1.0,
+    "slab_reveal_m": 0.1,
+    "gap": {"l_m": [0.75, 2.0], "candidate_step_m": 0.5, "overlap_frac": 0.5}
+  }
+}

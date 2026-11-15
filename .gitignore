@@ -1,3 +1,19 @@
 .godot/
 screenshots/
 *.blend1
+tools/terrain/.venv/
+tools/terrain/*.egg-info/
+__pycache__/
+.pytest_cache/
+data/sites/*/cache/
+data/sites/*/build/*.r32
+data/sites/*/build/manifest.json
+data/sites/*/build/ortho*.png
+data/sites/*/build/*_debug.png
+# scatter.json > 5 MB is deterministic from committed inputs (Ruling 21): rebuilt, not committed
+data/sites/*/build/scatter.json
+# Task 11 validation outputs (Godot --capture-topdown, replica check): rebuilt on demand
+data/sites/*/build/topdown.png
+data/sites/*/build/check.json
+# The second-site smoke run keeps only its site.json; its build is reproducible (fetch + build)
+data/sites/smoke/build/

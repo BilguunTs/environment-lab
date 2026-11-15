@@ -1,0 +1,16 @@
+{
+  "name": "smoke",
+  "lat": 46.2266,
+  "lon": 106.0386,
+  "core_m": 2000,
+  "core_step_m": 1.0,
+  "ring_m": 20000,
+  "ring_step_m": 30.0,
+  "ortho_m_per_px": 0.5,
+  "imagery_zoom": 17,
+  "rules": "steppe_granite",
+  "sun": {"azimuth_deg": 160.0, "elevation_deg": 30.0},
+  "sun_source": "manual placeholder for the second-site smoke run (Task 11): typical late-morning autumn sun at 46 N, not measured from this imagery's metadata or shadows",
+  "calibration": [],
+  "structures": []
+}

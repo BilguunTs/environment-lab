@@ -37,6 +37,21 @@ conventions below.
 
 The landmark has no imported collision. Its existing cylinder `Landmark/Body` blocks the outcrop.
 
+## Granite shape set (terrain replica)
+
+`assets/blender/build_granite.py` is a second, separate builder (the kit GLBs stay untouched):
+`blender -b --factory-startup -P assets/blender/build_granite.py` writes
+`assets/meshes/rocks_granite/` (round a/b/c, slab a/b, split a, scree a/b/c, and `ger.glb`).
+
+- **Unit box.** Every rock GLB is exactly 1 x 1 x 1 m, base at y = 0, centred on X/Z. The replica
+  sets `scale = (length, height, width)` from the measured rock, so never resize them by hand.
+- **Ger** is real size (6.0 m diameter, 1.6 m wall, 2.4 m crown, no eave overhang) and is scaled
+  per ger; its door faces +z (south in the replica frame).
+- **Colour is vertex colour** (flat per face) on palette materials `granite` and `felt`, which
+  use `flat_color` with `use_vertex_color` on. Other materials leave it off and look unchanged.
+- **No collision suffix:** the replica decides per instance (convex for large rocks, none for
+  multimesh scree). `tests/test_replica_rock_shapes.gd` checks sizes, colours and tri budgets.
+
 ## Using an asset in Godot
 
 Each GLB has a wrapper scene in `scenes/environment/kit/<name>.tscn`. The wrapper is a `Node3D`

@@ -1,0 +1,5 @@
+{"version": 1, "rocks": [
+{"id":"fixtureA0001","x":-18.0,"z":8.0,"length":4.0,"width":4.0,"yaw_deg":0.0,"height":4.0,"kind":"boulder","outline":null,"source":"detected","height_source":"shadow"},
+{"id":"fixtureB0002","x":13.0,"z":-20.0,"length":6.0,"width":4.0,"yaw_deg":90.0,"height":2.0,"kind":"boulder","outline":null,"source":"detected","height_source":"shadow"},
+{"id":"fixtureC0003","x":5.0,"z":22.5,"length":20.0,"width":5.0,"yaw_deg":90.0,"height":7.0,"kind":"mass","outline":[[-5.0,20.0],[15.0,20.0],[15.0,25.0],[-5.0,25.0]],"source":"detected","height_source":"shadow"}
+]}

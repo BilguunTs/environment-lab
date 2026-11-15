@@ -23,6 +23,9 @@ uniform float sway_frequency : hint_range(0.1, 10.0) = 1.0;
 // Per-object brightness/temperature jitter (seeded by the object's world position), so
 // repeated instances of one asset don't read as copies. 0 = off.
 uniform float tint_variation : hint_range(0.0, 0.5) = 0.0;
+// Multiply albedo by the mesh vertex colour (granite shape set, ger: colour lives in the mesh).
+// Off by default, so every existing material renders exactly as before.
+uniform bool use_vertex_color = false;
 // Per instance: measure height from the node's origin, not from world y = 0 (see the header).
 instance uniform bool height_from_origin = false;
 
@@ -57,6 +60,9 @@ void fragment() {
 	NORMAL = normalize(cross(dFdy(VERTEX), dFdx(VERTEX)));
 	float ground = 1.0 - base_darkening * (1.0 - smoothstep(0.0, base_height, world_y));
 	vec3 color = albedo.rgb;
+	if (use_vertex_color) {
+		color *= COLOR.rgb;
+	}
 	if (tint_variation > 0.0) {
 		vec2 seed = floor(NODE_POSITION_WORLD.xz * 4.0);
 		float v = hash(seed) * 2.0 - 1.0;          // brightness

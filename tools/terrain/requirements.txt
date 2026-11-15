@@ -1,0 +1,6 @@
+numpy==2.5.4
+scipy==1.18.1
+tifffile==2026.11.8
+Pillow==13.0.0
+pytest==9.2.0
+imagecodecs==2026.10.10
